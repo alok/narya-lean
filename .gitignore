@@ -1,0 +1,12 @@
+/.lake
+/build
+*.olean
+*.ilean
+*.c
+*.o
+*.s.out
+*.bin
+/tmp_asm_*
+.DS_Store
+.env
+.env.*
