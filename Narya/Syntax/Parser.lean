@@ -47,17 +47,34 @@ def parseSExps (fuel : Nat) (toks : List String) : Except String (List SExp × L
       let (more, rem) ← parseSExps fuel' rest
       .ok (.atom tok :: more, rem)
 
+/-- Kernel-reducible `"id:"` prefix stripper on `List Char`. -/
+def stripIdPrefix : List Char → Option String
+  | 'i' :: 'd' :: ':' :: rest => some (String.ofList rest)
+  | _ => none
+
+/-- Kernel-reducible character splitter on `List Char`. -/
+def splitCharsAux (sep : Char) (acc : List Char) : List Char → List String
+  | [] => [String.ofList acc.reverse]
+  | c :: cs =>
+    if c == sep then String.ofList acc.reverse :: splitCharsAux sep [] cs
+    else splitCharsAux sep (c :: acc) cs
+
+/-- Kernel-reducible `.`-splitter for modality path strings (`"R.L"` -> `["R", "L"]`). -/
+def splitByDot (s : String) : List String :=
+  splitCharsAux '.' [] s.toList
+
 /-- Resolve a modality path string (e.g. `"id:M"`, `"L"`, `"R.L"`) in `T`. -/
 def resolveModPath (T : ModeTheory) (defaultMode : ModeId) (raw : String) : Except String ModPath :=
-  if raw == "_" || raw == "id" then
+  if strEq raw "_" || strEq raw "id" then
     .ok (ModPath.id defaultMode)
-  else if raw.startsWith "id:" then
-    .ok (ModPath.id (raw.drop 3).toString)
   else
-    let parts := raw.splitOn "."
-    let rec buildSteps : List String → Except String (List ModGen)
-      | [] => .ok []
-      | p :: ps => do
+    match stripIdPrefix raw.toList with
+    | some mName => .ok (ModPath.id mName)
+    | none =>
+      let parts := splitByDot raw
+      let rec buildSteps : List String → Except String (List ModGen)
+        | [] => .ok []
+        | p :: ps => do
         match T.findMod? p with
         | some g =>
           let rest ← buildSteps ps
@@ -98,6 +115,10 @@ def elaborateSExp (fuel : Nat) (T : ModeTheory) (mode : ModeId) (locals : List S
     | .atom "true" => .ok (.ctor "Bool" "true" [])
     | .atom "false" => .ok (.ctor "Bool" "false" [])
     | .atom "tt" => .ok (.ctor "Unit" "tt" [])
+    | .atom "Nat" => .ok (.dataTy "Nat" [])
+    | .atom "Bool" => .ok (.dataTy "Bool" [])
+    | .atom "Unit" => .ok (.dataTy "Unit" [])
+    | .atom "Empty" => .ok (.dataTy "Empty" [])
     | .atom ident =>
       match findLocalIx? locals ident with
       | some ix => .ok (.bvar ix)

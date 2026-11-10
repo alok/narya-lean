@@ -26,6 +26,18 @@ abbrev ModId := String
 /-- Identifier for a generating 2-cell / modal key (`α : μ ⇒ ν`). -/
 abbrev KeyId := String
 
+/-- Kernel-reducible AND C-accelerated (`lean_string_dec_eq`) string equality.
+    Unlike `String.beq` (`==`), which is `opaque` in Lean 4's kernel, `decide (a = b)`
+    both compiles to `lean_string_dec_eq` in native code AND reduces by `rfl`/`decide`
+    inside Lean 4's trusted kernel! -/
+@[inline]
+def strEq (a b : String) : Bool :=
+  decide (a = b)
+
+@[simp]
+theorem strEq_eq_true (a b : String) : (strEq a b = true) ↔ (a = b) := by
+  simp [strEq]
+
 /-- Structural flags of a modality `μ : M → N`, unifying `docs/source/modal.rst`,
     `discrete.rst`, `external.rst`, and `displayed.rst`. -/
 structure ModalityFlags where
@@ -119,8 +131,8 @@ def comp (μ ν : ModPath) : ModPath :=
 
 /-- Check composable chain validity from `dom` to `cod`. -/
 def wfSteps (dom cod : ModeId) : List ModGen → Bool
-  | [] => dom == cod
-  | g :: rest => (g.cod == cod) && wfSteps dom g.dom rest
+  | [] => strEq dom cod
+  | g :: rest => (strEq g.cod cod) && wfSteps dom g.dom rest
 
 /-- Well-formedness of a `ModPath`. -/
 def wf (μ : ModPath) : Bool :=
@@ -128,7 +140,7 @@ def wf (μ : ModPath) : Bool :=
 
 @[simp]
 theorem wf_id (m : ModeId) : (id m).wf = true := by
-  simp [id, wf, wfSteps]
+  simp [id, wf, wfSteps, strEq]
 
 @[simp]
 theorem comp_id_left (μ : ModPath) : comp (id μ.cod) μ = μ := by
@@ -421,11 +433,11 @@ namespace ModeTheory
 
 /-- Look up a generating modality by name. -/
 def findMod? (T : ModeTheory) (name : ModId) : Option ModGen :=
-  T.modalities.find? (fun g => g.name == name)
+  T.modalities.find? (fun g => strEq g.name name)
 
 /-- Look up a generating 2-cell by name. -/
 def findTwoCell? (T : ModeTheory) (name : KeyId) : Option TwoCellGen :=
-  T.twoCells.find? (fun c => c.name == name)
+  T.twoCells.find? (fun c => strEq c.name name)
 
 /-- Check that every modality, 2-cell, and rule in `T` is well-formed over `T.modes`. -/
 def wf (T : ModeTheory) : Bool :=
