@@ -1,0 +1,30 @@
+name: Narya-Lean CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    name: Build & Verify Zero-Sorry Proofs
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build & Test with Lean 4 (Apple Silicon arm64)
+        uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          build: true
+          test: true
+
+      - name: Verify Zero Sorry Tactics
+        run: |
+          if rg -n -w "sorry" Narya Main.lean Tests | rg -v -e '--' -e '`.*sorry.*`' -e '\*.*sorry'; then
+            echo "ERROR: Found tactic 'sorry' in codebase!"
+            exit 1
+          fi
+          echo "Verified: zero 'sorry' tactics in codebase."

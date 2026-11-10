@@ -83,7 +83,7 @@ def toCoreList (T : ModeTheory) (mode : ModeId) (locals : List String) :
 /-- Lower `NTerm` into `Narya.Core.Term` with De Bruijn indices and resolved `ModPath`s. -/
 def toCore (T : ModeTheory) (mode : ModeId) (locals : List String) : NTerm → Narya.Core.Term
   | .var name =>
-    match locals.findIdx? (· == name) with
+    match locals.findIdx? (fun l => strEq l name) with
     | some ix => .bvar ix
     | none =>
       match name with
@@ -91,6 +91,10 @@ def toCore (T : ModeTheory) (mode : ModeId) (locals : List String) : NTerm → N
       | "true" => .ctor "Bool" "true" []
       | "false" => .ctor "Bool" "false" []
       | "tt" => .ctor "Unit" "tt" []
+      | "Nat" => .dataTy "Nat" []
+      | "Bool" => .dataTy "Bool" []
+      | "Unit" => .dataTy "Unit" []
+      | "Empty" => .dataTy "Empty" []
       | _ => .global name
   | .uu lvl => .uu lvl
   | .uuExt lvl => .uuExt lvl

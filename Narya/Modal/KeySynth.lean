@@ -115,16 +115,67 @@ def applyRuleAtHead (rule : TwoCellRule) (atoms : List WhiskeredAtom) :
     else none
   | _, _ => none
 
-/-- Single pass of rewriting across a spine of `WhiskeredAtom`s using `rules`. -/
+/-- Godement 2-categorical interchange & bulge-shrinking step on adjacent `a :: b` (`a ∘ᵥ b`):
+    1. Canonically commutes disjoint left-acting `a` past right-acting `b` when `a'.tgt` does not grow.
+    2. Commutes disjoint right-acting `a` past left-acting `b` whenever doing so strictly shrinks
+       the intermediate 1-cell path (`a'.tgt.steps.length < b.tgt.steps.length`). -/
+def tryInterchangeAtHead : List WhiskeredAtom → Option (List WhiskeredAtom)
+  | a :: b :: rest =>
+    let aL := a.left.steps.length
+    let aSrc := a.cell.src.steps.length
+    let aTgt := a.cell.tgt.steps.length
+    let aR := a.right.steps.length
+    let bL := b.left.steps.length
+    let bSrc := b.cell.src.steps.length
+    let bTgt := b.cell.tgt.steps.length
+    let bR := b.right.steps.length
+    let nonTrivial := !(aSrc == 0 && aTgt == 0 && bSrc == 0 && bTgt == 0)
+    -- Case 1: `a` acts on a disjoint slice strictly to the LEFT of `b`:
+    if nonTrivial && (aL + aSrc ≤ bL) && (bR + bTgt ≤ aR) then
+      let a' : WhiskeredAtom :=
+        { left := a.left
+          cell := a.cell
+          right := { dom := b.src.dom, cod := a.cell.src.dom, steps := b.src.steps.drop (aL + aSrc) } }
+      let b' : WhiskeredAtom :=
+        { left := { dom := b.cell.src.cod, cod := a'.tgt.cod, steps := a'.tgt.steps.take (a'.tgt.steps.length - bR - bSrc) }
+          cell := b.cell
+          right := b.right }
+      if a'.tgt.steps.length ≤ b.tgt.steps.length &&
+         a'.src == b.src && b'.src == a'.tgt && b'.tgt == a.tgt &&
+         a'.toExpr.wf && b'.toExpr.wf then
+        some (b' :: a' :: rest)
+      else none
+    -- Case 2: `a` acts on a disjoint slice strictly to the RIGHT of `b` and shrinks intermediate path:
+    else if (bL + bTgt ≤ aL) && (aR + aSrc ≤ bR) then
+      let a' : WhiskeredAtom :=
+        { left := { dom := a.cell.src.cod, cod := b.src.cod, steps := b.src.steps.take (b.src.steps.length - aR - aSrc) }
+          cell := a.cell
+          right := a.right }
+      let b' : WhiskeredAtom :=
+        { left := b.left
+          cell := b.cell
+          right := { dom := a'.tgt.dom, cod := b.cell.src.dom, steps := a'.tgt.steps.drop (bL + bSrc) } }
+      if a'.tgt.steps.length < b.tgt.steps.length &&
+         a'.src == b.src && b'.src == a'.tgt && b'.tgt == a.tgt &&
+         a'.toExpr.wf && b'.toExpr.wf then
+        some (b' :: a' :: rest)
+      else none
+    else none
+  | _ => none
+
+/-- Single pass of rewriting across a spine of `WhiskeredAtom`s using `rules` + Godement interchange. -/
 def rewriteAtomsOnce (rules : List TwoCellRule) : List WhiskeredAtom → Option (List WhiskeredAtom)
   | [] => none
   | a :: rest =>
     match rules.findSome? (fun r => applyRuleAtHead r (a :: rest)) with
     | some replaced => some replaced
     | none =>
-      match rewriteAtomsOnce rules rest with
-      | some rest' => some (a :: rest')
-      | none => none
+      match tryInterchangeAtHead (a :: rest) with
+      | some swapped => some swapped
+      | none =>
+        match rewriteAtomsOnce rules rest with
+        | some rest' => some (a :: rest')
+        | none => none
 
 /-- Normalize a spine of `WhiskeredAtom`s to fixed point (bounded by `fuel` steps). -/
 def rewriteAtomsLoop (rules : List TwoCellRule) : Nat → List WhiskeredAtom → List WhiskeredAtom

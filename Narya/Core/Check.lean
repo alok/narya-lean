@@ -131,12 +131,12 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
       match Γ.entries[ix]? with
       | none => .error s!"Unbound De Bruijn index #{ix} (context length {Γ.length})"
       | some entry =>
-        if entry.declMod == entry.accLock then
+        if decide (entry.declMod = entry.accLock) then
           .ok (.bvar ix, entry.ty)
         else
           match synthKey G.theory entry.declMod entry.accLock with
           | .unique cell =>
-            if cell == .id2 cell.src then .ok (.bvar ix, entry.ty)
+            if decide (cell = .id2 cell.src) then .ok (.bvar ix, entry.ty)
             else .ok (.key cell (.bvar ix), entry.ty)
           | .ambiguous c₁ c₂ =>
             .error s!"Ambiguous modal 2-cell for variable '{entry.name}' ({entry.declMod.pretty} ⇒ {entry.accLock.pretty}): {c₁.pretty} vs {c₂.pretty}"
@@ -146,7 +146,7 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
     | .global name =>
       match G.lookup? name with
       | some (.defn _ m _ ty _) =>
-        if m == Γ.mode || Γ.outerLock.steps.isEmpty then
+        if strEq m Γ.mode || Γ.outerLock.steps.isEmpty then
           .ok (.global name, evalTerm fuel' G [] ty)
         else
           .ok (.global name, evalTerm fuel' G [] ty)
@@ -169,7 +169,7 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
         .ok (.uuExt lvl, .uuExt (lvl + 1))
 
     | .pi name mod dom cod =>
-      if mod.cod != Γ.mode || !mod.wf then
+      if !strEq mod.cod Γ.mode || !mod.wf then
         .error s!"Invalid modality {mod.pretty} in Π-type at mode {Γ.mode}"
       else do
         let (dom', domUniv) ← synthTerm fuel' G (Γ.lockBy mod) dom
@@ -183,7 +183,7 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
       let (fn', fnTy) ← synthTerm fuel' G Γ fn
       match fnTy.force with
       | .pi _ expectedMod domVal codCl =>
-        if mod != expectedMod then
+        if !decide (mod = expectedMod) then
           .error s!"Application modality mismatch: expected {expectedMod.pretty}, got {mod.pretty}"
         else do
           let arg' ← checkTerm fuel' G (Γ.lockBy mod) arg domVal
@@ -225,7 +225,7 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
           .ok (.key (norm2Cell G.theory cell) sub', subTy)
 
     | .modalBox mod ty =>
-      if mod.cod != Γ.mode || !mod.wf then
+      if !strEq mod.cod Γ.mode || !mod.wf then
         .error s!"Invalid box modality {mod.pretty} at mode {Γ.mode}"
       else do
         let (ty', uVal) ← synthTerm fuel' G (Γ.lockBy mod) ty
@@ -233,7 +233,7 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
         .ok (.modalBox mod ty', .uu lvl)
 
     | .boxIntro mod sub =>
-      if mod.cod != Γ.mode || !mod.wf then
+      if !strEq mod.cod Γ.mode || !mod.wf then
         .error s!"Invalid boxIntro modality {mod.pretty} at mode {Γ.mode}"
       else do
         let (sub', subTy) ← synthTerm fuel' G (Γ.lockBy mod) sub
@@ -243,7 +243,7 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
       let (scrut', scrutTy) ← synthTerm fuel' G Γ scrut
       match scrutTy.force with
       | .modalBox boxMod innerTy =>
-        if boxMod != mod then
+        if !decide (boxMod = mod) then
           .error s!"letBox modality mismatch: expected {boxMod.pretty}, got {mod.pretty}"
         else if !mod.flags.tangible then
           .error s!"Modality {mod.pretty} is not tangible and cannot be eliminated by pattern matching!"
@@ -285,7 +285,7 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
       match G.lookupData? dName with
       | none => .error s!"Unknown inductive datatype '{dName}'"
       | some spec =>
-        match spec.ctors.find? (fun c => c.name == cName) with
+        match spec.ctors.find? (fun c => strEq c.name cName) with
         | none => .error s!"Unknown constructor '{dName}.{cName}'"
         | some cSpec =>
           if args.length != cSpec.argTys.length then
@@ -539,9 +539,9 @@ def synthRecordFields (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) :
     | 0 => .error "Out of fuel"
     | fuel' + 1 =>
       -- Negative modal codata field check: non-identity field modality MUST be sinister!
-      if fmod != ModPath.id Γ.mode && !fmod.flags.sinister then
+      if !decide (fmod = ModPath.id Γ.mode) && !fmod.flags.sinister then
         .error s!"Record/codata field '{fname}' uses non-sinister modality {fmod.pretty} (must be a left adjoint!)"
-      else if fmod.cod != Γ.mode || !fmod.wf then
+      else if !strEq fmod.cod Γ.mode || !fmod.wf then
         .error s!"Invalid modality {fmod.pretty} on field '{fname}' at mode {Γ.mode}"
       else do
         let (fty', uVal) ← synthTerm fuel' G (Γ.lockBy fmod) fty
@@ -558,8 +558,8 @@ def lookupRecordFieldTy (fuel : Nat) (G : GlobalEnv) (rEnv : List Val) (selfVal 
     | 0 => .error "Out of fuel"
     | fuel' + 1 =>
       let ftyVal := evalTerm fuel' G rEnv fty
-      if fname == target then
-        if fmod == ModPath.id fmod.cod then
+      if strEq fname target then
+        if decide (fmod = ModPath.id fmod.cod) then
           .ok ftyVal
         else
           -- Negative modal codata projection at sinister `L`: requires context to unlock `L` or wrap!
@@ -575,7 +575,7 @@ def checkTupleAgainstTele (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (rEnv : Lis
     match fuel with
     | 0 => .error "Out of fuel"
     | fuel' + 1 =>
-      if fname != gname then
+      if !strEq fname gname then
         .error s!"Tuple field mismatch: expected '{fname}', got '{gname}'"
       else do
         let ftyVal := evalTerm fuel' G rEnv fty
@@ -607,7 +607,7 @@ def checkMatchBranches (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx)
     match fuel with
     | 0 => .error "Out of fuel"
     | fuel' + 1 =>
-      match spec.ctors.find? (fun c => c.name == cName) with
+      match spec.ctors.find? (fun c => strEq c.name cName) with
       | none => .error s!"Unknown constructor '{cName}' in match on '{dName}'"
       | some cSpec =>
         if arity != cSpec.argTys.length then

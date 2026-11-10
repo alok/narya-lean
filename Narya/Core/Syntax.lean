@@ -153,13 +153,13 @@ def empty (T : ModeTheory := Combinators.pureHoTT) : GlobalEnv :=
 
 def lookup? (G : GlobalEnv) (name : String) : Option GlobalEntry :=
   G.entries.find? fun
-    | .defn n _ _ _ _ => n == name
-    | .ax n _ _ => n == name
-    | .ind s => s.name == name
+    | .defn n _ _ _ _ => strEq n name
+    | .ax n _ _ => strEq n name
+    | .ind s => strEq s.name name
 
 def lookupData? (G : GlobalEnv) (name : String) : Option DataSpec :=
   G.entries.findSome? fun
-    | .ind s => if s.name == name then some s else none
+    | .ind s => if strEq s.name name then some s else none
     | _ => none
 
 def add (G : GlobalEnv) (e : GlobalEntry) : GlobalEnv :=

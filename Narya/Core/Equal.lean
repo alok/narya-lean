@@ -26,7 +26,7 @@ def equalVal (fuel : Nat) (G : GlobalEnv) (depth : Nat) (v₁ v₂ : Val) : Bool
     -- Tier 1a: Glued fast-path (same defined constant head without forcing!)
     match v₁, v₂ with
     | .glued n₁ sp₁ f₁, .glued n₂ sp₂ f₂ =>
-      if n₁ == n₂ && equalSpines fuel' G depth sp₁ sp₂ then true
+      if strEq n₁ n₂ && equalSpines fuel' G depth sp₁ sp₂ then true
       else equalVal fuel' G depth f₁ f₂
     | .glued _ _ f₁, _ => equalVal fuel' G depth f₁ v₂
     | _, .glued _ _ f₂ => equalVal fuel' G depth v₁ f₂
@@ -35,26 +35,26 @@ def equalVal (fuel : Nat) (G : GlobalEnv) (depth : Nat) (v₁ v₂ : Val) : Bool
     | .uu l₁, .uu l₂ => l₁ == l₂
     | .uuExt l₁, .uuExt l₂ => l₁ == l₂
     | .pi _ m₁ d₁ c₁, .pi _ m₂ d₂ c₂ =>
-      (m₁ == m₂) &&
+      decide (m₁ = m₂) &&
       equalVal fuel' G depth d₁ d₂ &&
       let x := Val.vvar depth
       equalVal fuel' G (depth + 1) (evalClosure fuel' G c₁ x) (evalClosure fuel' G c₂ x)
     | .lam _ m₁ b₁, .lam _ m₂ b₂ =>
-      (m₁ == m₂) &&
+      decide (m₁ = m₂) &&
       let x := Val.vvar depth
       equalVal fuel' G (depth + 1) (evalClosure fuel' G b₁ x) (evalClosure fuel' G b₂ x)
     | .modalBox m₁ t₁, .modalBox m₂ t₂ =>
-      (m₁ == m₂) && equalVal fuel' G depth t₁ t₂
+      decide (m₁ = m₂) && equalVal fuel' G depth t₁ t₂
     | .boxIntro m₁ a₁, .boxIntro m₂ a₂ =>
-      (m₁ == m₂) && equalVal fuel' G depth a₁ a₂
+      decide (m₁ = m₂) && equalVal fuel' G depth a₁ a₂
     | .recordTy env₁ fs₁, .recordTy env₂ fs₂ =>
       equalRecordTele fuel' G depth env₁ env₂ fs₁ fs₂
     | .tuple fs₁, .tuple fs₂ =>
       equalTupleFields fuel' G depth fs₁ fs₂
     | .dataTy n₁ ps₁, .dataTy n₂ ps₂ =>
-      (n₁ == n₂) && equalValLists fuel' G depth ps₁ ps₂
+      strEq n₁ n₂ && equalValLists fuel' G depth ps₁ ps₂
     | .ctor d₁ c₁ as₁, .ctor d₂ c₂ as₂ =>
-      (d₁ == d₂) && (c₁ == c₂) && equalValLists fuel' G depth as₁ as₂
+      strEq d₁ d₂ && strEq c₁ c₂ && equalValLists fuel' G depth as₁ as₂
     | .obsEq g₁ ty₁ es₁, .obsEq g₂ ty₂ es₂ =>
       (g₁ == g₂) && equalVal fuel' G depth ty₁ ty₂ && equalValLists fuel' G depth es₁ es₂
     | .obsHet g₁ tb₁ es₁, .obsHet g₂ tb₂ es₂ =>
@@ -121,7 +121,7 @@ def equalRecordTele (fuel : Nat) (G : GlobalEnv) (depth : Nat) (env₁ env₂ : 
     match fuel with
     | 0 => false
     | fuel' + 1 =>
-      (n₁ == n₂) && (m₁ == m₂) &&
+      strEq n₁ n₂ && decide (m₁ = m₂) &&
       equalVal fuel' G depth (evalTerm fuel' G env₁ t₁) (evalTerm fuel' G env₂ t₂) &&
       let x := Val.vvar depth
       equalRecordTele fuel' G (depth + 1) (x :: env₁) (x :: env₂) r₁ r₂
@@ -135,7 +135,7 @@ def equalTupleFields (fuel : Nat) (G : GlobalEnv) (depth : Nat)
     match fuel with
     | 0 => false
     | fuel' + 1 =>
-      (n₁ == n₂) && equalVal fuel' G depth v₁ v₂ && equalTupleFields fuel' G depth r₁ r₂
+      strEq n₁ n₂ && equalVal fuel' G depth v₁ v₂ && equalTupleFields fuel' G depth r₁ r₂
   | _, _ => false
 
 def equalValLists (fuel : Nat) (G : GlobalEnv) (depth : Nat) (xs ys : List Val) : Bool :=

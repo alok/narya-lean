@@ -29,7 +29,7 @@ def lookupValEnv (env : List Val) (ix : Ix) : Val :=
 
 /-- Look up a field in a tuple's `(name, Val)` list. -/
 def lookupTupleField? (fields : List (String × Val)) (fname : String) : Option Val :=
-  fields.findSome? fun (n, v) => if n == fname then some v else none
+  fields.findSome? fun (n, v) => if strEq n fname then some v else none
 
 mutual
 
@@ -236,7 +236,7 @@ def evalMatch (fuel : Nat) (G : GlobalEnv) (scrut : Val) (winMod : ModPath)
   | fuel' + 1 =>
     match scrut with
     | .ctor _ ctorName args =>
-      match branches.find? (fun (cn, _, _) => cn == ctorName) with
+      match branches.find? (fun (cn, _, _) => strEq cn ctorName) with
       | some (_, _, body) =>
         -- Filter constructor arguments through the modal window (collapsing discrete bridges):
         let filteredArgs := args.map fun a =>

@@ -213,7 +213,7 @@ def addLocker (T : ModeTheory) (mode : ModeId) (lockName : ModId := "lock") : Mo
 /-! ### Standard Narya Mode Theories + Unified Type-Theory Presentations -/
 
 /-- 1. Pure single-mode Higher Observational Type Theory (`pureHoTT`). -/
-def pureHoTT : ModeTheory := trivialTheory "M"
+def pureHoTT : ModeTheory := { (trivialTheory "M") with name := "pure_hott" }
 
 /-- 2. Walking modality (`functor`: `F : M → N`). -/
 def functorTheory : ModeTheory := arrowTheory "functor" "M" "N" "F"
@@ -375,7 +375,7 @@ def guardedTheory : ModeTheory :=
     mode `"D"` (discretizing `Dir.param 2`), plus a parametricity locker `lock : P → P`! -/
 def externalParamTheory : ModeTheory :=
   let base := adjunctionNamed "external_param" "D" "P" "incl" "forget" "η_ext" "ε_ext"
-    { tangible := true, pellucid := true, sinister := true }
+    { tangible := true, pellucid := true, sinister := true, discreteDirs := [.param 2] }
     { tangible := true, pellucid := true, translucent := true, discreteDirs := [.param 2] }
   addLocker base "P" "lock"
 
@@ -385,7 +385,7 @@ def externalParamTheory : ModeTheory :=
     Semisimplicial Types (`SST`)! -/
 def displayedTheory : ModeTheory :=
   let base := adjunctionNamed "displayed_dtt" "Disc" "Disp" "up" "down" "η_dtt" "ε_dtt"
-    { tangible := true, pellucid := true, sinister := true }
+    { tangible := true, pellucid := true, sinister := true, discreteDirs := [.displayed] }
     { tangible := true, pellucid := true, translucent := true, discreteDirs := [.displayed] }
   addLocker base "Disp" "lock"
 
@@ -400,7 +400,7 @@ def displayedTheory : ModeTheory :=
     - Sinister adjunction `Lift ⊣ Erase` + `Quote` + `guarded` `later` modality! -/
 def perfectibleOptTheory : ModeTheory :=
   let adj := adjunctionNamed "perfectible_adj" "Mach" "Logic" "Lift" "Erase" "η_opt" "ε_opt"
-    { tangible := true, pellucid := true, sinister := true }
+    { tangible := true, pellucid := true, sinister := true, discreteDirs := [.param 2] }
     { tangible := true, pellucid := true, translucent := true, discreteDirs := [.param 2] }
   addLocker adj "Logic" "specLock"
 
