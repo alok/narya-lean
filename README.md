@@ -1,8 +1,8 @@
 # Narya-Lean
 
-**Higher-Dimensional Multi-Modal & Quantitative Observational Type Theory in Lean 4 — Unified Cubical/Modal/Linear Kernel, Open-Problem Proofs (`0 sorry`), Sorbet-Style Flat Arena, Linear Interaction Nets, Verified `Core → AArch64` `ThinEmitter` + In-Process `MAP_JIT`, Phase/Allocation Profiler, and Lake-Style Merkle Builder.**
+**Higher-Dimensional Multi-Modal & Quantitative Observational Type Theory in Lean 4 — Unified Cubical/Modal/Linear/Directed/HIT Kernel, 19 Machine-Checked Resolutions (`A`–`S`, `0 sorry`), Zero-Lisp Extensible `.narya` Pratt/Mixfix Syntax, Unison Content-Addressed `#hash` Digests, Sorbet-Style Flat Arena, Linear Interaction Nets, Verified `Core → AArch64` `ThinEmitter` + In-Process `MAP_JIT`, Profiler, and Lake-Style Merkle Builder.**
 
-`narya-lean` reimagines [Mike Shulman's Narya](https://github.com/mikeshulman/narya) inside **Lean 4** (`v4.35.0`), merging Narya's family of higher-dimensional, modal, and quantitative/linear type theories into one kernel with familiar Lean 4 metaprogramming syntax, machine-checked resolutions of **twelve upstream & architectural problems (`A`–`L`, `zero sorry`, `zero noncomputable`)**, CSLib-style theory & cost combinators (`TimeM`), and a top-to-bottom verified compiler (`Core.NbE → HIR → MIR → LIR → Arm64 → ThinEmitter ByteArray → W^X MAP_JIT`) engineered from day one around **Nelson Elhage's Sorbet data-layout principles** and **Leonardo de Moura's SViL Nov 2026 multi-IR codegen architecture**.
+`narya-lean` reimagines [Mike Shulman's Narya](https://github.com/mikeshulman/narya) inside **Lean 4** (`v4.35.0`), merging Narya's family of higher-dimensional, modal, directed, and quantitative/linear type theories into one kernel with a **Lean/Idris2/Granule-inspired extensible Zero-Lisp `.narya` surface language**, **Unison-style content-addressed AST/Proof/ABI hashing**, machine-checked resolutions of **nineteen upstream, theoretical, and architectural problems (`A`–`S`, `zero sorry`, `zero noncomputable`)**, CSLib-style theory & cost combinators (`TimeM`), and a top-to-bottom verified compiler (`Core.NbE → HIR → MIR → LIR → Arm64 → ThinEmitter ByteArray → W^X MAP_JIT`) engineered from day one around **Nelson Elhage's Sorbet data-layout principles** and **Leonardo de Moura's SViL Nov 2026 multi-IR codegen architecture**.
 
 ---
 
@@ -17,9 +17,19 @@
    - **Sorbet-Style Flat `SymId` Interner & 16-Byte `PackedNode` `TermArena` (`Arena.lean`)**: `O(1)` 32-bit `SymId` global table (**137x** faster than string-keyed list lookup: `25 µs` vs `3,436 µs` for 20k lookups) + hash-consed 16-byte `PackedNode` (`w0, w1 : UInt64`) arena executing 50,000 DAG evaluations in `1.52 ms` with **0 per-eval heap allocations**.
    - **Linear Interaction Nets (`InteractionNet.lean`)**: flat-array Lafont Symmetric Interaction Combinators (`32`-bit `Port`) where `1`-graded linear pipelines emit **zero `DUP` fan nodes**, **zero fan commutations**, and **zero arena grows** during reduction (**~4.6M interactions/sec**).
    - **Thin Emitter + In-Process W^X `MAP_JIT` / `mprotect` (`ThinEmitter.lean` + `cbits/narya_jit.c`)**: `core_nbe_to_arm64_correct` (`0 sorry`) proves `Core.evalTerm` (with HoTT/univalence/modal proof `let`-bindings erased!) equals `Arm64.exec`; `ThinEmitter` streams `bv_decide`-verified ARMv8-A 32-bit machine words directly into a `ByteArray` and executes them in-process in **~0.5–5 µs/run** (**>10,000x faster** than spawning `clang` at `~65,000 µs`, and **31x faster** than `HIR.eval` on 50,000-step SplitMix64 `cbnz x8` loops!).
-3. **First-Class Meta Tooling: Profiler & Lake-Inspired Merkle Builder (`Narya/Meta`)**:
+3. **Zero-Lisp Extensible `.narya` Syntax + Unison Content-Addressed `#hash` Digests (`Narya/Syntax/Modern.lean`, `Narya/Meta/ContentHash.lean`)**:
+   - **Lean/Idris2/Granule Surface Syntax (`.narya`)**: Pratt + arbitrary-arity mixfix parser (`SyntaxEnv`) extensible dynamically in-file and across `import`s via `prefix`, `postfix`, `infixl`, `infixr`, and leading/trailing `notation` (e.g. `notation 50 a " ≡[" A "] " b => Id A a b`, `⟪x, y⟫`), QTT graded binders (`(0 g : A)`, `(1 x : A)`, `(ω x : A)`, `(x @[μ] : A)`), modal boxes (`□[μ] A`, `box[μ] e`, `f @[μ] x`), layout-sensitive `let` blocks, and automatic `.ny → .narya` source translation (`narya translate`).
+   - **Machine-Checked Equivalence to Legacy `.ny` (`0 sorry`)**: `elabModernExpr_eq_elaborateSExp` and `ofSExp_toSExp_roundtrip` prove `.narya` elaborates identically to legacy `.ny` across all 22 mode theories.
+   - **Unison Content-Addressed Proof/Impl/ABI Hashing (`ContentHash.lean`)**: Every declaration receives a 3-tier digest (`#spec` theorem hash, `#impl` nameless De Bruijn + `#hash`-resolved implementation hash, and `#abi` raw ARMv8-A machine-code hash). Proven invariant under deep binder α-renaming (`termContentHash_alpha_invariant`) and upstream global refactoring (`global_rename_preserves_contentHash`) — verified 16/16 identical between `stdlib_modern/*.narya` and `stdlib/*.ny`!
+4. **Five Open HOTT/Narya Theory Frontiers Resolved (`Narya/Core/HIT.lean`, `Directed.lean`, `Squares.lean`, `RelTransfer.lean`, `Canonicity.lean`)**:
+   - **Observational 1-HITs (`HIT.lean`)**: Interval-free `S1`, `SuspBool`, `QuotSwap` with universal Licata–Shulman `π₁(S¹) ≅ ℤ` retract (`pi1_S1_encode_decode_pos`, `pi1_S1_encode_decode_neg`).
+   - **Directed HoTT (`Directed.lean`)**: Asymmetric `Dir.directed`, variance checking, `CovGlue` directed univalence without an inverse, and Covariant Yoneda on `Δ²`.
+   - **2D Cubical Squares & `--without-K` Eckmann–Hilton (`Squares.lean`)**: 9-face `CubeOf`/`TubeOf` open-box Kan filling with strict regularity, 2-sided `refl` η, and `eckmann_hilton_comm`.
+   - **Internal `Gel` Representation Transfer (`RelTransfer.lean`)**: Unary Peano `Nat` specifications proven to refine through `NatU64Gel` to 64-bit hardware execution on `Arm64.exec` and `ThinEmitter` `MAP_JIT`.
+   - **Closed Univalent + Modal Canonicity (`Canonicity.lean`)**: Tait–Girard hereditary logical relations proving closed `Bool` and `U64` terms compute to canonical values across `Glue`, `arrowLine`, `prodLine`, and `boxLine`.
+5. **First-Class Meta Tooling: Profiler & Lake-Inspired Merkle Builder (`Narya/Meta`)**:
    - **Nanosecond + Heap-Allocation Profiler (`Profiler.lean`)**: `@[noinline]`-guarded phase spans (`IO.monoNanosNow` + `IO.getNumHeartbeats`) exporting terminal hotspot tables, Chrome/Perfetto Trace Event JSON (`--json`), and Brendan Gregg `.folded` flamegraphs (`--folded`).
-   - **Lake-Style Content-Addressed Merkle DAG Builder (`Build.lean`)**: `narya.toml` manifest + `(import ...)` cycle-checked topological sort + `BuildTrace` (`1723` root seed + `mix`), persisting `.narya/build/*.trace`, `*.nyo`, and native `*.arm64.bin` artifacts (**1.65 ms** cold 4-module `stdlib` build + JIT verification; **0.47 ms** cached rebuild!).
+   - **Lake-Style Content-Addressed Merkle DAG Builder (`Build.lean`)**: `narya.toml` manifest + `import` cycle-checked topological sort + `BuildTrace` (`1723` root seed + `mix`), supporting `.narya`, `.ny`, and mixed packages while persisting `.trace`, `.nyo`, `unison.digests`, and native `.arm64.bin` artifacts (**< 1 ms** cached rebuild!).
 
 ---
 
@@ -52,6 +62,13 @@ flowchart LR
 | **J** | Sorbet-style cache-local AST arena & `O(1)` symbol interning | `SymId` (`UInt32`), `FastGlobalTable`, & hash-consed 16-byte `PackedNode` (`w0, w1 : UInt64`) `TermArena` | `pack_unpack_tag`, `pack_unpack_abc`, `pack_unpack_u64Lit` (`Fast/Arena.lean`) |
 | **K** | Optimal linear reduction without garbage collection or fan overhead | Flat-array Lafont `INet` (`32`-bit `Port`) with `freeList` node recycling & `0`-`DUP` linear compilation | `pack_unpack_slot`, `linear_pipeline_valid_and_zero_dups`, `bang_duplication_uses_dup_fans` (`Fast/InteractionNet.lean`) |
 | **L** | End-to-end `Core.NbE → Arm64` proof erasure, `ThinEmitter` binary encoding & sub-ms builds | `ErasableCore` simulation, `bv_decide` ARMv8-A encoders, W^X `MAP_JIT`/`mprotect`, `Profiler`, & `BuildTrace` | `evalTerm_erasure_sound`, `core_nbe_to_arm64_correct`, `decode_encodeMovk`, `decode_encodeAluReg` (`Erasure.lean`, `ThinEmitter.lean`) |
+| **M** | Observational 1-HITs without a cubical interval | `pctor`, `elimHIT` computing on `ap`, `S1`/`SuspBool`/`QuotSwap`, & universal `π₁(S¹) ≅ ℤ` | `pi1_S1_encode_decode_pos`, `pi1_S1_encode_decode_neg`, `SuspBool_not_merid_flips` (`Core/HIT.lean`) |
+| **N** | Directed HoTT & asymmetric `CovGlue` univalence without inverses | `Dir.directed`/`opDirected`, `directedCatTheory`, variance checker, `CovGlue`, & Yoneda | `directed_rejects_sym`, `covGlue_forward_beta_u64`, `directed_yoneda_naturality_delta2` (`Core/Directed.lean`) |
+| **O** | 2D cubical squares, strict Kan regularity, & `--without-K` Eckmann–Hilton | 9-face `Square2D`, `kanOpenBoxLid`, two-sided `refl` η, & `Ω²` commutativity | `square_tube_plug_roundtrip`, `kanOpenBoxLid_regularity`, `eckmann_hilton_comm` (`Core/Squares.lean`) |
+| **P** | Verified unary math spec → 64-bit hardware transfer (`Gel`) | `NatU64Gel` relational bridge from Peano `Nat` through `toU64` to `Arm64.exec` | `nat_add_transfers_to_arm64_u64`, `fastAddWithGelBridge_refines_peano` (`Core/RelTransfer.lean`) |
+| **Q** | Constructive Univalent + Modal Canonicity for `Bool` & `U64` | Tait–Girard `ValRel` logical relation across `Glue`, `sym`, `trans`, `arrowLine`, `prodLine`, `boxLine` | `closed_bool_canonicity`, `closed_u64_canonicity`, `higherOrder_univalent_canonicity` (`Core/Canonicity.lean`) |
+| **R** | Lisp-free Lean/Idris2/Granule extensible syntax equivalent to `.ny` | Total Pratt + mixfix `.narya` parser (`SyntaxEnv`), QTT grades, & `.ny → .narya` translator | `elabModernExpr_eq_elaborateSExp`, `ofSExp_toSExp_roundtrip`, `infix_desugar_eq_elaborateSExp`, `mixfix_id_desugar_eq_elaborateSExp` (`Syntax/Modern.lean`) |
+| **S** | Unison content-addressed source/proof/ABI model for agentic refactoring | Nameless De Bruijn + `#hash` `termContentHash` & 3-tier `DefDigest` (`#spec`, `#impl`, `#abi`) | `termContentHash_alpha_invariant`, `global_rename_preserves_contentHash`, `modern_and_legacy_same_contentHash`, `same_erasure_same_abiHash` (`Meta/ContentHash.lean`) |
 
 ---
 
@@ -61,7 +78,7 @@ flowchart LR
 - [Lean 4 / `elan`](https://lean-lang.org/lean4/doc/quickstart.html) (automatically selects `leanprover/lean4:v4.35.0` via `lean-toolchain`)
 - macOS on Apple Silicon (`clang`) **or** Linux `aarch64` (`cc`) for live W^X `MAP_JIT`/`mprotect` and Mach-O/ELF native execution
 
-### Build & Run Full Verification Suite (`65/65` Kernel, Arena, INet, JIT & Builder Assertions)
+### Build & Run Full Verification Suite (`75/75` Kernel, Theory Frontier, Syntax, Unison, Arena, INet & JIT Assertions)
 ```bash
 lake build
 lake test
@@ -69,23 +86,24 @@ lake test
 
 ### CLI Commands (`lake exe narya`)
 ```bash
-# 1. Incremental Lake-style Merkle DAG package build (cold build + native .arm64.bin cache + cached hit)
-lake exe narya build stdlib --rebuild
-lake exe narya build stdlib
+# 1. Incremental Merkle DAG build on Zero-Lisp .narya stdlib (with cross-module notations & Unison digests!)
+lake exe narya build stdlib_modern --rebuild
+lake exe narya build stdlib_modern
 
-# 2. Nanosecond + heap-allocation phase profiler with Chrome Trace JSON & Flamegraph export
-lake exe narya profile stdlib/collatz.ny --json /tmp/narya_trace.json --folded /tmp/narya.folded
+# 2. Inspect Unison content-addressed (#impl, #spec, #abi) digests & translate legacy .ny -> .narya
+lake exe narya hash stdlib_modern
+lake exe narya translate examples/univalence_and_modal.ny
 
-# 3. Stream verified ARMv8-A 32-bit machine words & run in-process via W^X MAP_JIT (~5 µs/run)
+# 3. Run dynamic Pratt/mixfix + QTT graded modal .narya showcase
+lake exe narya run examples/modern_showcase.narya
+
+# 4. Nanosecond + heap-allocation phase profiler with Chrome Trace JSON & Flamegraph export
+lake exe narya profile stdlib_modern/collatz.narya --json /tmp/narya_trace.json --folded /tmp/narya.folded
+
+# 5. Stream verified ARMv8-A 32-bit machine words & run in-process via W^X MAP_JIT (~5 µs/run)
 lake exe narya jit
-
-# 4. Run all 5 performance & allocation benchmark suites
 lake exe narya bench
-
-# 5. Inspect all 21 verified mode theories (including `linear_adjoint`) & run standalone .ny scripts
 lake exe narya catalog
-lake exe narya run examples/univalence_and_modal.ny
-lake exe narya asm
 ```
 
 ---
