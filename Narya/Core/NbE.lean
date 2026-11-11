@@ -31,6 +31,15 @@ def lookupValEnv (env : List Val) (ix : Ix) : Val :=
 def lookupTupleField? (fields : List (String × Val)) (fname : String) : Option Val :=
   fields.findSome? fun (n, v) => if strEq n fname then some v else none
 
+/-- Swap forward/backward fields (`fwd ↔ bwd`, `liftr ↔ liftl`) when inverting a `Gel`/`Glue` equivalence. -/
+def flipEquivFields (fields : List (String × Val)) : List (String × Val) :=
+  fields.map fun (k, v) =>
+    if strEq k "fwd" then ("bwd", v)
+    else if strEq k "bwd" then ("fwd", v)
+    else if strEq k "liftr" then ("liftl", v)
+    else if strEq k "liftl" then ("liftr", v)
+    else (k, v)
+
 mutual
 
 /-- Apply a semantic function `fn` to an argument `arg` at modality `mod`. -/
@@ -41,6 +50,26 @@ def applyVal (fuel : Nat) (G : GlobalEnv) (fn : Val) (mod : ModPath) (arg : Val)
     match fn with
     | .lam _ _ (.mk env body) =>
       evalTerm fuel' G (arg :: env) body
+    | .lam _ _ (.arrowTrr g pMod domLine codLine f₀) =>
+      let a₀ := evalTrl fuel' G g domLine arg
+      let fa₀ := applyVal fuel' G f₀ pMod a₀
+      evalTrr fuel' G g codLine fa₀
+    | .lam _ _ (.arrowTrl g pMod domLine codLine f₁) =>
+      let a₁ := evalTrr fuel' G g domLine arg
+      let fa₁ := applyVal fuel' G f₁ pMod a₁
+      evalTrl fuel' G g codLine fa₁
+    | .lam _ _ (.piTrr g pMod domLine env codLine f₀) =>
+      let a₀ := evalTrl fuel' G g domLine arg
+      let a₂ := evalLiftl fuel' G g domLine arg
+      let bLine := evalTerm fuel' G (a₂ :: arg :: a₀ :: env) codLine
+      let fa₀ := applyVal fuel' G f₀ pMod a₀
+      evalTrr fuel' G g bLine fa₀
+    | .lam _ _ (.piTrl g pMod domLine env codLine f₁) =>
+      let a₁ := evalTrr fuel' G g domLine arg
+      let a₂ := evalLiftr fuel' G g domLine arg
+      let bLine := evalTerm fuel' G (a₂ :: a₁ :: arg :: env) codLine
+      let fa₁ := applyVal fuel' G f₁ pMod a₁
+      evalTrl fuel' G g bLine fa₁
     | .glued name rspine forced =>
       .glued name (.app mod arg :: rspine) (applyVal fuel' G forced mod arg)
     | .neu (.potential name) rspine =>
@@ -135,17 +164,61 @@ def evalObsHet (fuel : Nat) (G : GlobalEnv) (g : Dir) (tyBridge : Val) (ends : L
       else .obsHet g tyBridge ends
     | _ => .obsHet g tyBridge ends
 
-/-- Compute symmetry `sym g p`. -/
+/-- Compute symmetry `sym g p` (including involutive cancellation, anti-homomorphism on `trans`,
+    and equivalence reversal on `Gel`/`Glue`, `arrowLine`, `prodLine`, and `boxLine`). -/
 def evalSym (fuel : Nat) (G : GlobalEnv) (g : Dir) (p : Val) : Val :=
   match fuel with
   | 0 => .neu (.ax "<sym-fuel>") [.sym g]
   | fuel' + 1 =>
     match p with
     | .refl g' tm => if g == g' then .refl g tm else .neu (.ax "<sym-dir>") [.sym g]
+    | .trans g' p₁ p₂ =>
+      if g == g' then
+        evalTrans fuel' G g (evalSym fuel' G g p₂) (evalSym fuel' G g p₁)
+      else .neu (.ax "<sym-dir>") [.sym g]
+    | .gel g' [a₀, a₁] rel =>
+      if g == g' then
+        match rel.force with
+        | .tuple fs => .gel g [a₁, a₀] (.tuple (flipEquivFields fs))
+        | _ => .gel g [a₁, a₀] rel
+      else .neu (.ax "<sym-dir>") [.sym g]
+    | .arrowLine g' mod dL cL =>
+      if g == g' then .arrowLine g mod (evalSym fuel' G g dL) (evalSym fuel' G g cL)
+      else .neu (.ax "<sym-dir>") [.sym g]
+    | .prodLine g' fN sN fL sL =>
+      if g == g' then .prodLine g fN sN (evalSym fuel' G g fL) (evalSym fuel' G g sL)
+      else .neu (.ax "<sym-dir>") [.sym g]
+    | .boxLine g' mod inL =>
+      if g == g' then .boxLine g mod (evalSym fuel' G g inL)
+      else .neu (.ax "<sym-dir>") [.sym g]
     | .glued name rspine forced =>
       .glued name (.sym g :: rspine) (evalSym fuel' G g forced)
+    | .neu hd (.sym g' :: rest) =>
+      if g == g' then .neu hd rest else .neu hd (.sym g :: .sym g' :: rest)
     | .neu hd rspine => .neu hd (.sym g :: rspine)
     | _ => .neu (.ax "<stuck-sym>") [.sym g]
+
+/-- Compute fibrant path composition `trans g p q` (two-sided `refl` identity + structural fusion). -/
+def evalTrans (fuel : Nat) (G : GlobalEnv) (g : Dir) (p : Val) (q : Val) : Val :=
+  match fuel with
+  | 0 => .trans g p q
+  | fuel' + 1 =>
+    match p.force, q.force with
+    | .refl g' _, _ => if g == g' then q else .trans g p q
+    | _, .refl g' _ => if g == g' then p else .trans g p q
+    | .arrowLine g₁ m₁ d₁ c₁, .arrowLine g₂ m₂ d₂ c₂ =>
+      if g == g₁ && g == g₂ && m₁ == m₂ then
+        .arrowLine g m₁ (evalTrans fuel' G g d₁ d₂) (evalTrans fuel' G g c₁ c₂)
+      else .trans g p q
+    | .prodLine g₁ f₁ s₁ a₁ b₁, .prodLine g₂ f₂ s₂ a₂ b₂ =>
+      if g == g₁ && g == g₂ && strEq f₁ f₂ && strEq s₁ s₂ then
+        .prodLine g f₁ s₁ (evalTrans fuel' G g a₁ a₂) (evalTrans fuel' G g b₁ b₂)
+      else .trans g p q
+    | .boxLine g₁ m₁ in₁, .boxLine g₂ m₂ in₂ =>
+      if g == g₁ && g == g₂ && m₁ == m₂ then
+        .boxLine g m₁ (evalTrans fuel' G g in₁ in₂)
+      else .trans g p q
+    | _, _ => .trans g p q
 
 /-- Compute congruence `ap g fn argBridge`. -/
 def evalAp (fuel : Nat) (G : GlobalEnv) (g : Dir) (fn : Val) (argBridge : Val) : Val :=
@@ -160,7 +233,13 @@ def evalAp (fuel : Nat) (G : GlobalEnv) (g : Dir) (fn : Val) (argBridge : Val) :
     | .glued name rspine forced =>
       .glued name (.ap g fn :: rspine) (evalAp fuel' G g fn forced)
     | .neu hd rspine => .neu hd (.ap g fn :: rspine)
-    | _ => .neu (.ax "<stuck-ap>") [.ap g fn]
+    | _ =>
+      -- Push `ap` of a modal box type constructor `λ X => ⟨μ | X⟩` directly into `boxLine`!
+      match fn.force with
+      | .lam _ _ (.mk _ (.modalBox bMod (.bvar 0))) =>
+        if bMod.keepsDir g then .boxLine g bMod argBridge
+        else .neu (.ax "<stuck-ap>") [.ap g fn]
+      | _ => .neu (.ax "<stuck-ap>") [.ap g fn]
 
 /-- Compute relational Gel witness extraction `ungel g bridgeVal`. -/
 def evalUngel (fuel : Nat) (G : GlobalEnv) (g : Dir) (bridgeVal : Val) : Val :=
@@ -175,10 +254,13 @@ def evalUngel (fuel : Nat) (G : GlobalEnv) (g : Dir) (bridgeVal : Val) : Val :=
     | .neu hd rspine => .neu hd (.ungel g :: rspine)
     | _ => .neu (.ax "<stuck-ungel>") [.ungel g]
 
-/-- Compute fibrant forward transport `trr g tyLine x₀`!
-    - `trr g (refl g A) x₀ ↝ x₀`
-    - **Univalence Computation**: `trr g (Gel g [A₀, A₁] equiv) x₀ ↝ equiv.fwd x₀`
-      (or `equiv x₀` if `equiv` is directly a function/equivalence)! -/
+/-- Compute fibrant forward transport `trr g tyLine x₀` across ALL HOTT type formers!
+    - `refl`: `trr g (refl g A) x₀ ↝ x₀`
+    - `Gel`/`Glue`: `trr g (Gel g [A₀, A₁] equiv) x₀ ↝ equiv.fwd x₀`
+    - `trans`: `trr g (trans g p q) x₀ ↝ trr g q (trr g p x₀)`
+    - `arrowLine` / `piLine`: contravariant `trl`/`liftl` on domain, covariant `trr` on codomain!
+    - `prodLine` / `sigLine`: dependent field-by-field transport using `liftr` on earlier fields!
+    - `boxLine`: `trr g (boxLine g μ pA) (boxIntro μ a₀) ↝ boxIntro μ (trr g pA a₀)`! -/
 def evalTrr (fuel : Nat) (G : GlobalEnv) (g : Dir) (tyLine : Val) (x₀ : Val) : Val :=
   match fuel with
   | 0 => .neu (.ax "<trr-fuel>") [.trr g tyLine]
@@ -195,6 +277,38 @@ def evalTrr (fuel : Nat) (G : GlobalEnv) (g : Dir) (tyLine : Val) (x₀ : Val) :
           | none => applyVal fuel' G rel (ModPath.id G.theory.defaultMode) x₀
         | _ => applyVal fuel' G rel (ModPath.id G.theory.defaultMode) x₀
       else .neu (.ax "<trr-dir>") [.trr g tyLine]
+    | .trans g' p q =>
+      if g == g' then evalTrr fuel' G g q (evalTrr fuel' G g p x₀)
+      else .neu (.ax "<trr-dir>") [.trr g tyLine]
+    | .arrowLine g' mod domL codL =>
+      if g == g' then .lam "x" mod (.arrowTrr g mod domL codL x₀)
+      else .neu (.ax "<trr-dir>") [.trr g tyLine]
+    | .piLine g' name mod domL env _ _ codL =>
+      if g == g' then .lam name mod (.piTrr g mod domL env codL x₀)
+      else .neu (.ax "<trr-dir>") [.trr g tyLine]
+    | .prodLine g' fN sN fL sL =>
+      if g == g' then
+        let vFst := evalTrr fuel' G g fL (projVal fuel' G x₀ fN)
+        let vSnd := evalTrr fuel' G g sL (projVal fuel' G x₀ sN)
+        .tuple [(fN, vFst), (sN, vSnd)]
+      else .neu (.ax "<trr-dir>") [.trr g tyLine]
+    | .sigLine g' fN sN _ _ fL env _ _ sL =>
+      if g == g' then
+        let u₀_fst := projVal fuel' G x₀ fN
+        let u₀_snd := projVal fuel' G x₀ sN
+        let u₁_fst := evalTrr fuel' G g fL u₀_fst
+        let u_lift := evalLiftr fuel' G g fL u₀_fst
+        let sLineVal := evalTerm fuel' G (u_lift :: u₁_fst :: u₀_fst :: env) sL
+        let u₁_snd := evalTrr fuel' G g sLineVal u₀_snd
+        .tuple [(fN, u₁_fst), (sN, u₁_snd)]
+      else .neu (.ax "<trr-dir>") [.trr g tyLine]
+    | .boxLine g' mod inL =>
+      if g == g' then
+        match x₀.force with
+        | .boxIntro _ a₀ => .boxIntro mod (evalTrr fuel' G g inL a₀)
+        | .neu hd rspine => .neu hd (.trr g tyLine :: rspine)
+        | _ => .neu (.ax "<stuck-trr-box>") [.trr g tyLine]
+      else .neu (.ax "<trr-dir>") [.trr g tyLine]
     | _ =>
       match x₀ with
       | .neu hd rspine => .neu hd (.trr g tyLine :: rspine)
@@ -202,9 +316,7 @@ def evalTrr (fuel : Nat) (G : GlobalEnv) (g : Dir) (tyLine : Val) (x₀ : Val) :
         .glued name (.trr g tyLine :: rspine) (evalTrr fuel' G g tyLine forced)
       | _ => .neu (.ax "<stuck-trr>") [.trr g tyLine]
 
-/-- Compute fibrant backward transport `trl g tyLine x₁`!
-    - `trl g (refl g A) x₁ ↝ x₁`
-    - **Univalence Inverse Computation**: `trl g (Gel g [A₀, A₁] equiv) x₁ ↝ equiv.bwd x₁`! -/
+/-- Compute fibrant backward transport `trl g tyLine x₁` across ALL HOTT type formers! -/
 def evalTrl (fuel : Nat) (G : GlobalEnv) (g : Dir) (tyLine : Val) (x₁ : Val) : Val :=
   match fuel with
   | 0 => .neu (.ax "<trl-fuel>") [.trl g tyLine]
@@ -221,12 +333,128 @@ def evalTrl (fuel : Nat) (G : GlobalEnv) (g : Dir) (tyLine : Val) (x₁ : Val) :
           | none => applyVal fuel' G rel (ModPath.id G.theory.defaultMode) x₁
         | _ => applyVal fuel' G rel (ModPath.id G.theory.defaultMode) x₁
       else .neu (.ax "<trl-dir>") [.trl g tyLine]
+    | .trans g' p q =>
+      if g == g' then evalTrl fuel' G g p (evalTrl fuel' G g q x₁)
+      else .neu (.ax "<trl-dir>") [.trl g tyLine]
+    | .arrowLine g' mod domL codL =>
+      if g == g' then .lam "x" mod (.arrowTrl g mod domL codL x₁)
+      else .neu (.ax "<trl-dir>") [.trl g tyLine]
+    | .piLine g' name mod domL env _ _ codL =>
+      if g == g' then .lam name mod (.piTrl g mod domL env codL x₁)
+      else .neu (.ax "<trl-dir>") [.trl g tyLine]
+    | .prodLine g' fN sN fL sL =>
+      if g == g' then
+        let vFst := evalTrl fuel' G g fL (projVal fuel' G x₁ fN)
+        let vSnd := evalTrl fuel' G g sL (projVal fuel' G x₁ sN)
+        .tuple [(fN, vFst), (sN, vSnd)]
+      else .neu (.ax "<trl-dir>") [.trl g tyLine]
+    | .sigLine g' fN sN _ _ fL env _ _ sL =>
+      if g == g' then
+        let u₁_fst := projVal fuel' G x₁ fN
+        let u₁_snd := projVal fuel' G x₁ sN
+        let u₀_fst := evalTrl fuel' G g fL u₁_fst
+        let u_liftl := evalLiftl fuel' G g fL u₁_fst
+        let sLineVal := evalTerm fuel' G (u_liftl :: u₁_fst :: u₀_fst :: env) sL
+        let u₀_snd := evalTrl fuel' G g sLineVal u₁_snd
+        .tuple [(fN, u₀_fst), (sN, u₀_snd)]
+      else .neu (.ax "<trl-dir>") [.trl g tyLine]
+    | .boxLine g' mod inL =>
+      if g == g' then
+        match x₁.force with
+        | .boxIntro _ a₁ => .boxIntro mod (evalTrl fuel' G g inL a₁)
+        | .neu hd rspine => .neu hd (.trl g tyLine :: rspine)
+        | _ => .neu (.ax "<stuck-trl-box>") [.trl g tyLine]
+      else .neu (.ax "<trl-dir>") [.trl g tyLine]
     | _ =>
       match x₁ with
       | .neu hd rspine => .neu hd (.trl g tyLine :: rspine)
       | .glued name rspine forced =>
         .glued name (.trl g tyLine :: rspine) (evalTrl fuel' G g tyLine forced)
       | _ => .neu (.ax "<stuck-trl>") [.trl g tyLine]
+
+/-- Compute fibrant forward path lifting `liftr g tyLine x₀`! -/
+def evalLiftr (fuel : Nat) (G : GlobalEnv) (g : Dir) (tyLine : Val) (x₀ : Val) : Val :=
+  match fuel with
+  | 0 => .liftr g tyLine x₀
+  | fuel' + 1 =>
+    match tyLine.force with
+    | .refl g' _ => if g == g' then .refl g x₀ else .liftr g tyLine x₀
+    | .gel g' _ rel =>
+      if g == g' then
+        match rel.force with
+        | .tuple fields =>
+          match lookupTupleField? fields "liftr" with
+          | some liftrFn =>
+            let idM := ModPath.id G.theory.defaultMode
+            let x₁ := evalTrr fuel' G g tyLine x₀
+            let wit := applyVal fuel' G liftrFn idM x₀
+            .gelIntro g [x₀, x₁] wit
+          | none => .liftr g tyLine x₀
+        | _ => .liftr g tyLine x₀
+      else .liftr g tyLine x₀
+    | .prodLine g' fN sN fL sL =>
+      if g == g' then
+        .tuple [(fN, evalLiftr fuel' G g fL (projVal fuel' G x₀ fN)),
+                (sN, evalLiftr fuel' G g sL (projVal fuel' G x₀ sN))]
+      else .liftr g tyLine x₀
+    | .sigLine g' fN sN _ _ fL env _ _ sL =>
+      if g == g' then
+        let u₀_fst := projVal fuel' G x₀ fN
+        let u₀_snd := projVal fuel' G x₀ sN
+        let u₁_fst := evalTrr fuel' G g fL u₀_fst
+        let u_lift := evalLiftr fuel' G g fL u₀_fst
+        let sLineVal := evalTerm fuel' G (u_lift :: u₁_fst :: u₀_fst :: env) sL
+        .tuple [(fN, u_lift), (sN, evalLiftr fuel' G g sLineVal u₀_snd)]
+      else .liftr g tyLine x₀
+    | .boxLine g' mod inL =>
+      if g == g' then
+        match x₀.force with
+        | .boxIntro _ a₀ => .boxIntro mod (evalLiftr fuel' G g inL a₀)
+        | _ => .liftr g tyLine x₀
+      else .liftr g tyLine x₀
+    | _ => .liftr g tyLine x₀
+
+/-- Compute fibrant backward path lifting `liftl g tyLine x₁` (`hott.rst:14`)! -/
+def evalLiftl (fuel : Nat) (G : GlobalEnv) (g : Dir) (tyLine : Val) (x₁ : Val) : Val :=
+  match fuel with
+  | 0 => .liftl g tyLine x₁
+  | fuel' + 1 =>
+    match tyLine.force with
+    | .refl g' _ => if g == g' then .refl g x₁ else .liftl g tyLine x₁
+    | .gel g' _ rel =>
+      if g == g' then
+        match rel.force with
+        | .tuple fields =>
+          match lookupTupleField? fields "liftl" with
+          | some liftlFn =>
+            let idM := ModPath.id G.theory.defaultMode
+            let x₀ := evalTrl fuel' G g tyLine x₁
+            let wit := applyVal fuel' G liftlFn idM x₁
+            .gelIntro g [x₀, x₁] wit
+          | none => .liftl g tyLine x₁
+        | _ => .liftl g tyLine x₁
+      else .liftl g tyLine x₁
+    | .prodLine g' fN sN fL sL =>
+      if g == g' then
+        .tuple [(fN, evalLiftl fuel' G g fL (projVal fuel' G x₁ fN)),
+                (sN, evalLiftl fuel' G g sL (projVal fuel' G x₁ sN))]
+      else .liftl g tyLine x₁
+    | .sigLine g' fN sN _ _ fL env _ _ sL =>
+      if g == g' then
+        let u₁_fst := projVal fuel' G x₁ fN
+        let u₁_snd := projVal fuel' G x₁ sN
+        let u₀_fst := evalTrl fuel' G g fL u₁_fst
+        let u_liftl := evalLiftl fuel' G g fL u₁_fst
+        let sLineVal := evalTerm fuel' G (u_liftl :: u₁_fst :: u₀_fst :: env) sL
+        .tuple [(fN, u_liftl), (sN, evalLiftl fuel' G g sLineVal u₁_snd)]
+      else .liftl g tyLine x₁
+    | .boxLine g' mod inL =>
+      if g == g' then
+        match x₁.force with
+        | .boxIntro _ a₁ => .boxIntro mod (evalLiftl fuel' G g inL a₁)
+        | _ => .liftl g tyLine x₁
+      else .liftl g tyLine x₁
+    | _ => .liftl g tyLine x₁
 
 /-- Compute windowed inductive pattern matching (`matchData`). -/
 def evalMatch (fuel : Nat) (G : GlobalEnv) (scrut : Val) (winMod : ModPath)
@@ -355,7 +583,21 @@ def evalTerm (fuel : Nat) (G : GlobalEnv) (env : List Val) (tm : Term) : Val :=
     | .trl g tyL x₁ =>
       evalTrl fuel' G g (evalTerm fuel' G env tyL) (evalTerm fuel' G env x₁)
     | .liftr g tyL x₀ =>
-      .liftr g (evalTerm fuel' G env tyL) (evalTerm fuel' G env x₀)
+      evalLiftr fuel' G g (evalTerm fuel' G env tyL) (evalTerm fuel' G env x₀)
+    | .liftl g tyL x₁ =>
+      evalLiftl fuel' G g (evalTerm fuel' G env tyL) (evalTerm fuel' G env x₁)
+    | .trans g p q =>
+      evalTrans fuel' G g (evalTerm fuel' G env p) (evalTerm fuel' G env q)
+    | .arrowLine g mod dL cL =>
+      .arrowLine g mod (evalTerm fuel' G env dL) (evalTerm fuel' G env cL)
+    | .piLine g name mod dL c0 c1 cL =>
+      .piLine g name mod (evalTerm fuel' G env dL) env c0 c1 cL
+    | .prodLine g fN sN fL sL =>
+      .prodLine g fN sN (evalTerm fuel' G env fL) (evalTerm fuel' G env sL)
+    | .sigLine g fN sN fM sM fL s0 s1 sL =>
+      .sigLine g fN sN fM sM (evalTerm fuel' G env fL) env s0 s1 sL
+    | .boxLine g mod inL =>
+      .boxLine g mod (evalTerm fuel' G env inL)
     | .pathJ g ty base motive reflCase target path =>
       evalPathJ fuel' G g
         (evalTerm fuel' G env ty)
@@ -378,6 +620,26 @@ def eval (G : GlobalEnv) (env : List Val) (tm : Term) : Val :=
 def evalClosure (fuel : Nat) (G : GlobalEnv) (cl : Closure) (arg : Val) : Val :=
   match cl with
   | .mk env body => evalTerm fuel G (arg :: env) body
+  | .arrowTrr g pMod domLine codLine f₀ =>
+    let a₀ := evalTrl fuel G g domLine arg
+    let fa₀ := applyVal fuel G f₀ pMod a₀
+    evalTrr fuel G g codLine fa₀
+  | .arrowTrl g pMod domLine codLine f₁ =>
+    let a₁ := evalTrr fuel G g domLine arg
+    let fa₁ := applyVal fuel G f₁ pMod a₁
+    evalTrl fuel G g codLine fa₁
+  | .piTrr g pMod domLine env codLine f₀ =>
+    let a₀ := evalTrl fuel G g domLine arg
+    let a₂ := evalLiftl fuel G g domLine arg
+    let bLine := evalTerm fuel G (a₂ :: arg :: a₀ :: env) codLine
+    let fa₀ := applyVal fuel G f₀ pMod a₀
+    evalTrr fuel G g bLine fa₀
+  | .piTrl g pMod domLine env codLine f₁ =>
+    let a₁ := evalTrr fuel G g domLine arg
+    let a₂ := evalLiftr fuel G g domLine arg
+    let bLine := evalTerm fuel G (a₂ :: a₁ :: arg :: env) codLine
+    let fa₁ := applyVal fuel G f₁ pMod a₁
+    evalTrl fuel G g bLine fa₁
 
 /-! ### Readback (`quoteVal`) from `Val` to Normal-Form `Term` -/
 
@@ -485,12 +747,38 @@ def quoteVal (fuel : Nat) (G : GlobalEnv) (depth : Nat) (v : Val) : Term :=
     | .obsHet g tyB ends =>
       .obsHet g (quoteVal fuel' G depth tyB) (quoteVals fuel' G depth ends)
     | .refl g sub => .refl g (quoteVal fuel' G depth sub)
+    | .trans g p q =>
+      .trans g (quoteVal fuel' G depth p) (quoteVal fuel' G depth q)
     | .gel g tys rel =>
       .gel g (quoteVals fuel' G depth tys) (quoteVal fuel' G depth rel)
     | .gelIntro g ends wit =>
       .gelIntro g (quoteVals fuel' G depth ends) (quoteVal fuel' G depth wit)
+    | .arrowLine g mod dL cL =>
+      .arrowLine g mod (quoteVal fuel' G depth dL) (quoteVal fuel' G depth cL)
+    | .piLine g name mod dL env c0 c1 cL =>
+      let v0 := Val.vvar depth
+      let v1 := Val.vvar (depth + 1)
+      let v2 := Val.vvar (depth + 2)
+      let qC0 := quoteVal fuel' G (depth + 1) (evalTerm fuel' G (v0 :: env) c0)
+      let qC1 := quoteVal fuel' G (depth + 1) (evalTerm fuel' G (v0 :: env) c1)
+      let qCL := quoteVal fuel' G (depth + 3) (evalTerm fuel' G (v2 :: v1 :: v0 :: env) cL)
+      .piLine g name mod (quoteVal fuel' G depth dL) qC0 qC1 qCL
+    | .prodLine g fN sN fL sL =>
+      .prodLine g fN sN (quoteVal fuel' G depth fL) (quoteVal fuel' G depth sL)
+    | .sigLine g fN sN fM sM fL env s0 s1 sL =>
+      let v0 := Val.vvar depth
+      let v1 := Val.vvar (depth + 1)
+      let v2 := Val.vvar (depth + 2)
+      let qS0 := quoteVal fuel' G (depth + 1) (evalTerm fuel' G (v0 :: env) s0)
+      let qS1 := quoteVal fuel' G (depth + 1) (evalTerm fuel' G (v0 :: env) s1)
+      let qSL := quoteVal fuel' G (depth + 3) (evalTerm fuel' G (v2 :: v1 :: v0 :: env) sL)
+      .sigLine g fN sN fM sM (quoteVal fuel' G depth fL) qS0 qS1 qSL
+    | .boxLine g mod inL =>
+      .boxLine g mod (quoteVal fuel' G depth inL)
     | .liftr g tyL x₀ =>
       .liftr g (quoteVal fuel' G depth tyL) (quoteVal fuel' G depth x₀)
+    | .liftl g tyL x₁ =>
+      .liftl g (quoteVal fuel' G depth tyL) (quoteVal fuel' G depth x₁)
 
 end
 

@@ -43,6 +43,11 @@ inductive NTerm where
   | trr (tyL : NTerm) (x₀ : NTerm)
   | trl (tyL : NTerm) (x₁ : NTerm)
   | liftr (tyL : NTerm) (x₀ : NTerm)
+  | liftl (tyL : NTerm) (x₁ : NTerm)
+  | trans (g : Dir) (p : NTerm) (q : NTerm)
+  | arrowLine (modName : String) (dL : NTerm) (cL : NTerm)
+  | prodLine (fN sN : String) (fL : NTerm) (sL : NTerm)
+  | boxLine (modName : String) (inL : NTerm)
   deriving BEq, Repr, Inhabited
 
 namespace NTerm
@@ -138,21 +143,42 @@ def toCore (T : ModeTheory) (mode : ModeId) (locals : List String) : NTerm → N
   | .trr tyL x₀ => .trr Dir.hott (toCore T mode locals tyL) (toCore T mode locals x₀)
   | .trl tyL x₁ => .trl Dir.hott (toCore T mode locals tyL) (toCore T mode locals x₁)
   | .liftr tyL x₀ => .liftr Dir.hott (toCore T mode locals tyL) (toCore T mode locals x₀)
+  | .liftl tyL x₁ => .liftl Dir.hott (toCore T mode locals tyL) (toCore T mode locals x₁)
+  | .trans g p q => .trans g (toCore T mode locals p) (toCore T mode locals q)
+  | .arrowLine modStr dL cL =>
+    let mp := resolveModTotal T mode modStr
+    .arrowLine Dir.hott mp (toCore T mp.dom locals dL) (toCore T mode locals cL)
+  | .prodLine fN sN fL sL =>
+    .prodLine Dir.hott fN sN (toCore T mode locals fL) (toCore T mode locals sL)
+  | .boxLine modStr inL =>
+    let mp := resolveModTotal T mode modStr
+    .boxLine Dir.hott mp (toCore T mp.dom locals inL)
 
 end
 
+/-- Fold a non-empty list of equational reasoning steps (`calc_eq`) via `NTerm.trans`. -/
+def foldCalcSteps : List NTerm → NTerm
+  | [] => .refl Dir.hott (.uu 0)
+  | [s] => s
+  | s :: rest => rest.foldl (fun acc next => .trans Dir.hott acc next) s
+
 end NTerm
 
-/-! ### Custom Lean 4 Syntax Categories (`narya_tm`, `narya_field`, `narya_assign`) -/
+/-! ### Custom Lean 4 Syntax Categories (`narya_tm`, `narya_field`, `narya_assign`, `narya_calc_step`) -/
 
 declare_syntax_cat narya_tm
 declare_syntax_cat narya_field
 declare_syntax_cat narya_assign
+declare_syntax_cat narya_calc_step
 
 -- Record/codata field declarations & tuple assignments:
 syntax ident " : " narya_tm : narya_field
 syntax "(" ident " : " ident " | " narya_tm ")" : narya_field
 syntax ident " := " narya_tm : narya_assign
+
+-- Equational reasoning `calc` step (`hott.rst:69-85`):
+syntax "==" narya_tm "by" narya_tm : narya_calc_step
+syntax "==" narya_tm "by" "<-" narya_tm : narya_calc_step
 
 -- Atomic & structured Narya terms in familiar Lean 4 syntax:
 syntax "Type" : narya_tm
@@ -199,6 +225,13 @@ syntax "ungel" "(" narya_tm ")" : narya_tm
 syntax "trr" "(" narya_tm "," narya_tm ")" : narya_tm
 syntax "trl" "(" narya_tm "," narya_tm ")" : narya_tm
 syntax "liftr" "(" narya_tm "," narya_tm ")" : narya_tm
+syntax "liftl" "(" narya_tm "," narya_tm ")" : narya_tm
+syntax "sym" "(" narya_tm ")" : narya_tm
+syntax "trans" "(" narya_tm "," narya_tm ")" : narya_tm
+syntax "arrowLine" "(" narya_tm "," narya_tm ")" : narya_tm
+syntax "prodLine" "(" narya_tm "," narya_tm ")" : narya_tm
+syntax "boxLine" "(" ident "," narya_tm ")" : narya_tm
+syntax "calc_eq" "(" narya_tm narya_calc_step* ")" : narya_tm
 
 -- Juxtaposition application:
 syntax:70 narya_tm:70 ppSpace narya_tm:71 : narya_tm
@@ -207,6 +240,7 @@ syntax:70 narya_tm:70 ppSpace narya_tm:71 : narya_tm
 syntax "narya_ntm!" narya_tm : term
 syntax "narya_field!" narya_field : term
 syntax "narya_assign!" narya_assign : term
+syntax "narya_calc_step!" narya_calc_step : term
 syntax "narya!" "[" term "]" narya_tm : term
 syntax "narya_hoTT!" narya_tm : term
 
@@ -217,6 +251,10 @@ macro_rules
     `(($(quote f.getId.toString), $(quote m.getId.toString), narya_ntm! $t))
   | `(narya_assign! $f:ident := $t:narya_tm) =>
     `(($(quote f.getId.toString), narya_ntm! $t))
+  | `(narya_calc_step! == $_:narya_tm by $p:narya_tm) =>
+    `(narya_ntm! $p)
+  | `(narya_calc_step! == $_:narya_tm by <- $r:narya_tm) =>
+    `(NTerm.sym Dir.hott (narya_ntm! $r))
 
 macro_rules
   | `(narya_ntm! Type) => `(NTerm.uu 0)
@@ -288,6 +326,20 @@ macro_rules
     `(NTerm.trl (narya_ntm! $p) (narya_ntm! $x))
   | `(narya_ntm! liftr($p:narya_tm, $x:narya_tm)) =>
     `(NTerm.liftr (narya_ntm! $p) (narya_ntm! $x))
+  | `(narya_ntm! liftl($p:narya_tm, $x:narya_tm)) =>
+    `(NTerm.liftl (narya_ntm! $p) (narya_ntm! $x))
+  | `(narya_ntm! sym($p:narya_tm)) =>
+    `(NTerm.sym Dir.hott (narya_ntm! $p))
+  | `(narya_ntm! trans($p:narya_tm, $q:narya_tm)) =>
+    `(NTerm.trans Dir.hott (narya_ntm! $p) (narya_ntm! $q))
+  | `(narya_ntm! arrowLine($d:narya_tm, $c:narya_tm)) =>
+    `(NTerm.arrowLine "_" (narya_ntm! $d) (narya_ntm! $c))
+  | `(narya_ntm! prodLine($f:narya_tm, $s:narya_tm)) =>
+    `(NTerm.prodLine "fst" "snd" (narya_ntm! $f) (narya_ntm! $s))
+  | `(narya_ntm! boxLine($m:ident, $inner:narya_tm)) =>
+    `(NTerm.boxLine $(quote m.getId.toString) (narya_ntm! $inner))
+  | `(narya_ntm! calc_eq($_:narya_tm $[$steps:narya_calc_step]*)) =>
+    `(NTerm.foldCalcSteps [ $[narya_calc_step! $steps],* ])
   | `(narya_ntm! $fn:narya_tm $arg:narya_tm) =>
     `(NTerm.app (narya_ntm! $fn) "_" (narya_ntm! $arg))
 

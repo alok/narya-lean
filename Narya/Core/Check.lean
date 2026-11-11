@@ -445,6 +445,184 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
             .ok (.liftr g tyL' x₀', evalObsHet fuel' G g tyLVal [x₀Val, x₁Val])
         | other => .error s!"liftr expects a path of types, got: {reprStr other}"
 
+    | .liftl g tyL x₁ =>
+      if !g.fibrant || g.arity != 2 then
+        .error s!"Backward path lift liftl requires a fibrant binary HoTT direction, got {reprStr g}"
+      else do
+        let (tyL', tyLTy) ← synthTerm fuel' G Γ tyL
+        match tyLTy.force with
+        | .obsEq g' _ [_, a₁] =>
+          if g != g' then .error "Direction mismatch in liftl"
+          else do
+            let x₁' ← checkTerm fuel' G Γ x₁ a₁
+            let tyLVal := evalTerm fuel' G Γ.idEnv tyL'
+            let x₁Val := evalTerm fuel' G Γ.idEnv x₁'
+            let x₀Val := evalTrl fuel' G g tyLVal x₁Val
+            .ok (.liftl g tyL' x₁', evalObsHet fuel' G g tyLVal [x₀Val, x₁Val])
+        | other => .error s!"liftl expects a path of types, got: {reprStr other}"
+
+    | .trans g p q =>
+      if !g.fibrant || g.arity != 2 then
+        .error s!"Path composition trans requires a fibrant binary HoTT direction, got {reprStr g}"
+      else do
+        let (p', pTy) ← synthTerm fuel' G Γ p
+        let (q', qTy) ← synthTerm fuel' G Γ q
+        match pTy.force, qTy.force with
+        | .obsEq g₁ ty₁ [a₀, a₁], .obsEq g₂ ty₂ [b₀, b₁] =>
+          if g != g₁ || g != g₂ then
+            .error "Direction mismatch in trans"
+          else if !equalVal fuel' G Γ.length ty₁ ty₂ then
+            .error "Base type mismatch in trans"
+          else if !equalAt fuel' G Γ.length ty₁ a₁ b₀ then
+            .error s!"Path endpoint mismatch in trans: {reprStr a₁} vs {reprStr b₀}"
+          else
+            .ok (.trans g p' q', evalObsEq fuel' G g ty₁ [a₀, b₁])
+        | other₁, other₂ =>
+          .error s!"trans expects two homogeneous binary paths, got {reprStr other₁} and {reprStr other₂}"
+
+    | .arrowLine g mod dL cL =>
+      if g.arity != 2 then
+        .error "arrowLine requires a binary direction"
+      else if !strEq mod.cod Γ.mode || !mod.wf then
+        .error s!"Invalid modality {mod.pretty} in arrowLine at mode {Γ.mode}"
+      else do
+        let (dL', dLTy) ← synthTerm fuel' G (Γ.lockBy mod) dL
+        let (cL', cLTy) ← synthTerm fuel' G Γ cL
+        match dLTy.force, cLTy.force with
+        | .obsEq g₁ u₁ [a₀, a₁], .obsEq g₂ u₂ [b₀, b₁] =>
+          if g != g₁ || g != g₂ then .error "Direction mismatch in arrowLine"
+          else do
+            let l₁ ← ensureUniverse u₁
+            let l₂ ← ensureUniverse u₂
+            let qB₀ := quoteVal fuel' G (Γ.length + 1) b₀
+            let qB₁ := quoteVal fuel' G (Γ.length + 1) b₁
+            let pi₀ : Val := .pi "_" mod a₀ (.mk Γ.idEnv qB₀)
+            let pi₁ : Val := .pi "_" mod a₁ (.mk Γ.idEnv qB₁)
+            .ok (.arrowLine g mod dL' cL', .obsEq g (.uu (Nat.max l₁ l₂)) [pi₀, pi₁])
+        | _, _ => .error "arrowLine expects two binary type paths"
+
+    | .piLine g name mod dL c0 c1 cL =>
+      if g.arity != 2 then
+        .error "piLine requires a binary direction"
+      else if !strEq mod.cod Γ.mode || !mod.wf then
+        .error s!"Invalid modality {mod.pretty} in piLine at mode {Γ.mode}"
+      else do
+        let (dL', dLTy) ← synthTerm fuel' G (Γ.lockBy mod) dL
+        match dLTy.force with
+        | .obsEq g₁ u₁ [a₀, a₁] =>
+          if g != g₁ then .error "Direction mismatch in piLine"
+          else do
+            let l₁ ← ensureUniverse u₁
+            let (c0', uC0) ← synthTerm fuel' G (Γ.extend name mod a₀) c0
+            let l₀ ← ensureUniverse uC0
+            let (c1', uC1) ← synthTerm fuel' G (Γ.extend name mod a₁) c1
+            let l₁' ← ensureUniverse uC1
+            let d := Γ.length
+            let v₀ := Val.vvar d
+            let v₁ := Val.vvar (d + 1)
+            let dLVal := evalTerm fuel' G Γ.idEnv dL'
+            let hetTy := evalObsHet fuel' G g dLVal [v₀, v₁]
+            let Γ₃ := ((Γ.extend (name ++ "0") mod a₀).extend (name ++ "1") mod a₁).extend (name ++ "2") mod hetTy
+            let (cL', cLTy) ← synthTerm fuel' G Γ₃ cL
+            match cLTy.force with
+            | .obsEq g₂ uCL [b₀Val, b₁Val] =>
+              if g != g₂ then .error "Codomain line direction mismatch in piLine"
+              else do
+                let lCL ← ensureUniverse uCL
+                let expB₀ := evalTerm fuel' G (v₀ :: Γ.idEnv) c0'
+                let expB₁ := evalTerm fuel' G (v₁ :: Γ.idEnv) c1'
+                if !equalVal fuel' G (d + 3) b₀Val expB₀ || !equalVal fuel' G (d + 3) b₁Val expB₁ then
+                  .error "piLine codomain line endpoints do not match cod0 / cod1"
+                else
+                  let pi₀ : Val := .pi name mod a₀ (.mk Γ.idEnv c0')
+                  let pi₁ : Val := .pi name mod a₁ (.mk Γ.idEnv c1')
+                  let lvl := Nat.max l₁ (Nat.max l₀ (Nat.max l₁' lCL))
+                  .ok (.piLine g name mod dL' c0' c1' cL', .obsEq g (.uu lvl) [pi₀, pi₁])
+            | _ => .error "piLine codLine must synthesize a binary type path"
+        | _ => .error "piLine domLine must synthesize a binary type path"
+
+    | .prodLine g fN sN fL sL =>
+      if g.arity != 2 then
+        .error "prodLine requires a binary direction"
+      else do
+        let (fL', fLTy) ← synthTerm fuel' G Γ fL
+        let (sL', sLTy) ← synthTerm fuel' G Γ sL
+        match fLTy.force, sLTy.force with
+        | .obsEq g₁ u₁ [a₀, a₁], .obsEq g₂ u₂ [b₀, b₁] =>
+          if g != g₁ || g != g₂ then .error "Direction mismatch in prodLine"
+          else do
+            let l₁ ← ensureUniverse u₁
+            let l₂ ← ensureUniverse u₂
+            let idM := ModPath.id Γ.mode
+            let qA₀ := quoteVal fuel' G Γ.length a₀
+            let qA₁ := quoteVal fuel' G Γ.length a₁
+            let qB₀ := quoteVal fuel' G (Γ.length + 1) b₀
+            let qB₁ := quoteVal fuel' G (Γ.length + 1) b₁
+            let rec₀ : Val := .recordTy Γ.idEnv [(fN, idM, qA₀), (sN, idM, qB₀)]
+            let rec₁ : Val := .recordTy Γ.idEnv [(fN, idM, qA₁), (sN, idM, qB₁)]
+            .ok (.prodLine g fN sN fL' sL', .obsEq g (.uu (Nat.max l₁ l₂)) [rec₀, rec₁])
+        | _, _ => .error "prodLine expects two binary type paths"
+
+    | .sigLine g fN sN fM sM fL s0 s1 sL =>
+      if g.arity != 2 then
+        .error "sigLine requires a binary direction"
+      else if (!decide (fM = ModPath.id Γ.mode) && !fM.flags.sinister) ||
+              (!decide (sM = ModPath.id Γ.mode) && !sM.flags.sinister) then
+        .error "Non-identity field modality in sigLine must be sinister"
+      else do
+        let (fL', fLTy) ← synthTerm fuel' G (Γ.lockBy fM) fL
+        match fLTy.force with
+        | .obsEq g₁ u₁ [a₀, a₁] =>
+          if g != g₁ then .error "Direction mismatch in sigLine"
+          else do
+            let l₁ ← ensureUniverse u₁
+            let (s0', uS0) ← synthTerm fuel' G ((Γ.extend fN fM a₀).lockBy sM) s0
+            let l₀ ← ensureUniverse uS0
+            let (s1', uS1) ← synthTerm fuel' G ((Γ.extend fN fM a₁).lockBy sM) s1
+            let l₁' ← ensureUniverse uS1
+            let d := Γ.length
+            let v₀ := Val.vvar d
+            let v₁ := Val.vvar (d + 1)
+            let fLVal := evalTerm fuel' G Γ.idEnv fL'
+            let hetTy := evalObsHet fuel' G g fLVal [v₀, v₁]
+            let Γ₃ := (((Γ.extend (fN ++ "0") fM a₀).extend (fN ++ "1") fM a₁).extend (fN ++ "2") fM hetTy).lockBy sM
+            let (sL', sLTy) ← synthTerm fuel' G Γ₃ sL
+            match sLTy.force with
+            | .obsEq g₂ uSL [b₀Val, b₁Val] =>
+              if g != g₂ then .error "Second field line direction mismatch in sigLine"
+              else do
+                let lSL ← ensureUniverse uSL
+                let expB₀ := evalTerm fuel' G (v₀ :: Γ.idEnv) s0'
+                let expB₁ := evalTerm fuel' G (v₁ :: Γ.idEnv) s1'
+                if !equalVal fuel' G (d + 3) b₀Val expB₀ || !equalVal fuel' G (d + 3) b₁Val expB₁ then
+                  .error "sigLine second-field line endpoints do not match snd0 / snd1"
+                else
+                  let qA₀ := quoteVal fuel' G d a₀
+                  let qA₁ := quoteVal fuel' G d a₁
+                  let rec₀ : Val := .recordTy Γ.idEnv [(fN, fM, qA₀), (sN, sM, s0')]
+                  let rec₁ : Val := .recordTy Γ.idEnv [(fN, fM, qA₁), (sN, sM, s1')]
+                  let lvl := Nat.max l₁ (Nat.max l₀ (Nat.max l₁' lSL))
+                  .ok (.sigLine g fN sN fM sM fL' s0' s1' sL', .obsEq g (.uu lvl) [rec₀, rec₁])
+            | _ => .error "sigLine sndLine must synthesize a binary type path"
+        | _ => .error "sigLine fstLine must synthesize a binary type path"
+
+    | .boxLine g mod inL =>
+      if g.arity != 2 then
+        .error "boxLine requires a binary direction"
+      else if !strEq mod.cod Γ.mode || !mod.wf then
+        .error s!"Invalid modality {mod.pretty} in boxLine at mode {Γ.mode}"
+      else if !mod.keepsDir g then
+        .error s!"Modality {mod.pretty} discretizes direction {g.name}; cannot form non-trivial boxLine"
+      else do
+        let (inL', inLTy) ← synthTerm fuel' G (Γ.lockBy mod) inL
+        match inLTy.force with
+        | .obsEq g' u [a₀, a₁] =>
+          if g != g' then .error "Direction mismatch in boxLine"
+          else do
+            let l ← ensureUniverse u
+            .ok (.boxLine g mod inL', .obsEq g (.uu l) [.modalBox mod a₀, .modalBox mod a₁])
+        | _ => .error "boxLine innerLine must synthesize a binary type path"
+
     | .pathJ g ty base motive reflCase target path =>
       if !g.fibrant || g.arity != 2 then
         .error s!"Path induction J requires a fibrant HoTT direction, got {reprStr g}"

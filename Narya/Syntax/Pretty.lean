@@ -125,6 +125,22 @@ def prettyTerm (names : List String) : Term → String
     s!"(trl {prettyTerm names tyL} {prettyTerm names x₁})"
   | .liftr _ tyL x₀ =>
     s!"(liftr {prettyTerm names tyL} {prettyTerm names x₀})"
+  | .liftl _ tyL x₁ =>
+    s!"(liftl {prettyTerm names tyL} {prettyTerm names x₁})"
+  | .trans _ p q =>
+    s!"(trans {prettyTerm names p} {prettyTerm names q})"
+  | .arrowLine _ mod dL cL =>
+    if mod.steps.isEmpty then s!"(arrowLine {prettyTerm names dL} {prettyTerm names cL})"
+    else s!"(arrowLine@{mod.pretty} {prettyTerm names dL} {prettyTerm names cL})"
+  | .piLine _ x mod dL c0 c1 cL =>
+    let xFresh := if names.contains x then s!"{x}_{names.length}" else x
+    s!"(piLine ({xFresh} : {mod.pretty}) {prettyTerm names dL} {prettyTerm (xFresh :: names) c0} {prettyTerm (xFresh :: names) c1} {prettyTerm ((xFresh ++ "2") :: (xFresh ++ "1") :: (xFresh ++ "0") :: names) cL})"
+  | .prodLine _ fN sN fL sL =>
+    s!"(prodLine {fN} {sN} {prettyTerm names fL} {prettyTerm names sL})"
+  | .sigLine _ fN sN _ _ fL s0 s1 sL =>
+    s!"(sigLine {fN} {sN} {prettyTerm names fL} {prettyTerm (fN :: names) s0} {prettyTerm (fN :: names) s1} {prettyTerm ((fN ++ "2") :: (fN ++ "1") :: (fN ++ "0") :: names) sL})"
+  | .boxLine _ mod inL =>
+    s!"(boxLine[{mod.pretty}] {prettyTerm names inL})"
   | .pathJ _ _ base _ reflC target path =>
     s!"(J {prettyTerm names base} {prettyTerm names reflC} {prettyTerm names target} {prettyTerm names path})"
 
