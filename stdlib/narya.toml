@@ -1,0 +1,5 @@
+# Narya-Lean Standard Library Package Manifest
+name = "narya-stdlib"
+version = "0.2.0"
+default_theory = "pure_hott"
+roots = ["core", "univalence", "collatz", "linear"]

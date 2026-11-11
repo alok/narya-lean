@@ -60,6 +60,12 @@ def newRef : IO (IO.Ref ProfileState) := do
   let now ← IO.monoNanosNow
   IO.mkRef { originNs := now }
 
+/-- Opaque `@[noinline]` `IO` barrier preventing Lean's LCNF optimizer from hoisting
+    pure computations across `IO.monoNanosNow` / `IO.getNumHeartbeats` boundaries! -/
+@[noinline]
+def runMeasuredPure {α : Type} (thunk : Unit → α) : IO α :=
+  pure (thunk ())
+
 /-- Measure a nested `IO` action under `(category, name)`, capturing exact wall-clock ns & heap allocs! -/
 def withSpan {α : Type} (ref : IO.Ref ProfileState) (category name : String) (act : IO α) : IO α := do
   let stBefore ← ref.get
@@ -84,6 +90,10 @@ def withSpan {α : Type} (ref : IO.Ref ProfileState) (category name : String) (a
   catch e =>
     ref.modify fun s => { s with activeStack := stBefore.activeStack }
     throw e
+
+/-- Convenience wrapper measuring a pure `Unit → α` thunk strictly inside `withSpan`. -/
+def withSpanPure {α : Type} (ref : IO.Ref ProfileState) (category name : String) (thunk : Unit → α) : IO α :=
+  withSpan ref category name (runMeasuredPure thunk)
 
 /-- Escape a string for safe JSON emission. -/
 private def jsonEscape (s : String) : String :=
@@ -194,9 +204,9 @@ end ProfileState
 def profileScriptWithEnv (prof : IO.Ref ProfileState) (G0 : GlobalEnv) (script : String)
     (modLabel : String := "<script>") : IO (Except String (GlobalEnv × List String)) := do
   ProfileState.withSpan prof "module" modLabel do
-    let parsedRes ← ProfileState.withSpan prof "parse" modLabel do
+    let parsedRes ← ProfileState.withSpanPure prof "parse" modLabel fun () =>
       let toks := tokenize script
-      pure (parseSExps (toks.length + 32) toks)
+      parseSExps (toks.length + 32) toks
     match parsedRes with
     | .error e => return .error e
     | .ok (forms, rem) =>
@@ -217,12 +227,11 @@ def profileScriptWithEnv (prof : IO.Ref ProfileState) (G0 : GlobalEnv) (script :
           | none => return .error s!"Unknown mode theory '{tName}'"
 
         | .list [.atom "axiom", .atom name, tyExp] =>
-          let stepRes ← ProfileState.withSpan prof "typecheck" s!"axiom:{name}" do
-            pure (do
-              let ty ← elaborateSExp 512 G.theory m [] tyExp
-              let (ty', u) ← synthClosed G ty
-              let _ ← ensureUniverse u
-              pure ty')
+          let stepRes ← ProfileState.withSpanPure prof "typecheck" s!"axiom:{name}" fun () => do
+            let ty ← elaborateSExp 512 G.theory m [] tyExp
+            let (ty', u) ← synthClosed G ty
+            let _ ← ensureUniverse u
+            pure ty'
           match stepRes with
           | .error e => return .error e
           | .ok ty' =>
@@ -230,19 +239,18 @@ def profileScriptWithEnv (prof : IO.Ref ProfileState) (G0 : GlobalEnv) (script :
             logs := logs ++ [s!"[axiom] {name} : {prettyTerm [] ty'}"]
 
         | .list [.atom "def", .atom name, tyExp, bodyExp] =>
-          let elabRes ← ProfileState.withSpan prof "elaborate" name do
-            pure (do
-              let ty ← elaborateSExp 512 G.theory m [] tyExp
-              let body ← elaborateSExp 512 G.theory m [] bodyExp
-              pure (ty, body))
+          let elabRes ← ProfileState.withSpanPure prof "elaborate" name fun () => do
+            let ty ← elaborateSExp 512 G.theory m [] tyExp
+            let body ← elaborateSExp 512 G.theory m [] bodyExp
+            pure (ty, body)
           match elabRes with
           | .error e => return .error e
           | .ok (ty, body) =>
             -- 1. Intern in Sorbet flat `TermArena`
-            let arena' ← ProfileState.withSpan prof "arena_intern" name do
+            let arena' ← ProfileState.withSpanPure prof "arena_intern" name fun () =>
               let (_, a1) := arena.internTerm ty
               let (_, a2) := a1.internTerm body
-              pure a2
+              a2
             let addedNodes := arena'.nodes.size - arena.nodes.size
             let addedHits := arena'.hcHits - arena.hcHits
             arena := arena'
@@ -252,10 +260,9 @@ def profileScriptWithEnv (prof : IO.Ref ProfileState) (G0 : GlobalEnv) (script :
                   arenaHcHits := s.counters.arenaHcHits + addedHits } }
 
             -- 2. Check QTT linearity + guardedness + kernel bidirectional check
-            let chkRes ← ProfileState.withSpan prof "typecheck" name do
-              pure (do
-                checkLinearity G.theory m body
-                addSafeCheckedDef G name ty body .kinetic)
+            let chkRes ← ProfileState.withSpanPure prof "typecheck" name fun () => do
+              checkLinearity G.theory m body
+              addSafeCheckedDef G name ty body .kinetic
             match chkRes with
             | .error e => return .error e
             | .ok G' =>
@@ -263,8 +270,8 @@ def profileScriptWithEnv (prof : IO.Ref ProfileState) (G0 : GlobalEnv) (script :
               logs := logs ++ [s!"[def] {name} : {prettyTerm [] ty}"]
               -- 3. If `ErasableCore [] body`, automatically ThinEmit + verify via `MAP_JIT`!
               if ErasableCore [] body then
-                let code ← ProfileState.withSpan prof "thin_emit" name do
-                  pure (thinCompileCore body)
+                let code ← ProfileState.withSpanPure prof "thin_emit" name fun () =>
+                  thinCompileCore body
                 prof.modify fun s =>
                   { s with counters := { s.counters with thinEmitBytes := s.counters.thinEmitBytes + code.size } }
                 if (← jitSupported) then
@@ -275,11 +282,10 @@ def profileScriptWithEnv (prof : IO.Ref ProfileState) (G0 : GlobalEnv) (script :
                   logs := logs ++ [s!"[jit] {name}(27, 0) => {jitVal} ({code.size} ARM64 bytes)"]
 
         | .list [.atom "codef", .atom name, tyExp, bodyExp] =>
-          let chkRes ← ProfileState.withSpan prof "typecheck" s!"codef:{name}" do
-            pure (do
-              let ty ← elaborateSExp 512 G.theory m [] tyExp
-              let body ← elaborateSExp 512 G.theory m [] bodyExp
-              addSafeCheckedDef G name ty body .potential)
+          let chkRes ← ProfileState.withSpanPure prof "typecheck" s!"codef:{name}" fun () => do
+            let ty ← elaborateSExp 512 G.theory m [] tyExp
+            let body ← elaborateSExp 512 G.theory m [] bodyExp
+            addSafeCheckedDef G name ty body .potential
           match chkRes with
           | .error e => return .error e
           | .ok G' =>
@@ -287,40 +293,37 @@ def profileScriptWithEnv (prof : IO.Ref ProfileState) (G0 : GlobalEnv) (script :
             logs := logs ++ [s!"[codef] {name}"]
 
         | .list [.atom "solve", .atom holeIdStr, lhsExp, rhsExp] =>
-          let solRes ← ProfileState.withSpan prof "unify" s!"?{holeIdStr}" do
-            pure (do
-              let hid := holeIdStr.toNat?.getD 0
-              let lhs ← elaborateSExp 512 G.theory m [] lhsExp
-              let rhs ← elaborateSExp 512 G.theory m [] rhsExp
-              let mc0 := MetaCtx.empty.addUnsolved hid (.uu 0) 0
-              match unifyTerms G mc0 0 lhs rhs with
-              | .equal mc1 =>
-                match mc1.lookupSolutionTerm? hid with
-                | some sol => .ok s!"[solve] ?{hid} := {prettyTerm [] sol}"
-                | none => .ok s!"[solve] unified ?{hid}"
-              | .blocked b _ => .error s!"Blocked on ?{b}"
-              | .notEqual => .error s!"Unification failed: terms are not convertible")
+          let solRes ← ProfileState.withSpanPure prof "unify" s!"?{holeIdStr}" fun () => do
+            let hid := holeIdStr.toNat?.getD 0
+            let lhs ← elaborateSExp 512 G.theory m [] lhsExp
+            let rhs ← elaborateSExp 512 G.theory m [] rhsExp
+            let mc0 := MetaCtx.empty.addUnsolved hid (.uu 0) 0
+            match unifyTerms G mc0 0 lhs rhs with
+            | .equal mc1 =>
+              match mc1.lookupSolutionTerm? hid with
+              | some sol => .ok s!"[solve] ?{hid} := {prettyTerm [] sol}"
+              | none => .ok s!"[solve] unified ?{hid}"
+            | .blocked b _ => .error s!"Blocked on ?{b}"
+            | .notEqual => .error s!"Unification failed: terms are not convertible"
           match solRes with
           | .error e => return .error e
           | .ok line => logs := logs ++ [line]
 
         | .list [.atom "check", tmExp] =>
-          let cRes ← ProfileState.withSpan prof "typecheck" "check_cmd" do
-            pure (do
-              let tm ← elaborateSExp 512 G.theory m [] tmExp
-              let (tm', tyVal) ← synthClosed G tm
-              pure s!"[check] {prettyTerm [] tm'} : {prettyVal G tyVal}")
+          let cRes ← ProfileState.withSpanPure prof "typecheck" "check_cmd" fun () => do
+            let tm ← elaborateSExp 512 G.theory m [] tmExp
+            let (tm', tyVal) ← synthClosed G tm
+            pure s!"[check] {prettyTerm [] tm'} : {prettyVal G tyVal}"
           match cRes with
           | .error e => return .error e
           | .ok line => logs := logs ++ [line]
 
         | .list [.atom "eval", tmExp] =>
-          let eRes ← ProfileState.withSpan prof "nbe_eval" "eval_cmd" do
-            pure (do
-              let tm ← elaborateSExp 512 G.theory m [] tmExp
-              let (tm', tyVal) ← synthClosed G tm
-              let nf := normalize G [] 0 tm'
-              pure s!"[eval] {prettyTerm [] nf} : {prettyVal G tyVal}")
+          let eRes ← ProfileState.withSpanPure prof "nbe_eval" "eval_cmd" fun () => do
+            let tm ← elaborateSExp 512 G.theory m [] tmExp
+            let (tm', tyVal) ← synthClosed G tm
+            let nf := normalize G [] 0 tm'
+            pure s!"[eval] {prettyTerm [] nf} : {prettyVal G tyVal}"
           match eRes with
           | .error e => return .error e
           | .ok line => logs := logs ++ [line]

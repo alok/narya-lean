@@ -8,11 +8,13 @@
 -/
 import Lean
 import Narya.Syntax.Parser
+import Narya.Compiler.ThinEmitter
 
 namespace Narya.Elab
 
 open Lean Elab Command Meta
 open Narya.Dim Narya.Modal Narya.Modal.Combinators Narya.Core Narya.Syntax
+open Narya.Compiler Narya.Compiler.ThinEmitter
 
 /-! ### Named Intermediate AST (`NTerm`) for Hygienic Lexical + Modal Resolution -/
 
@@ -49,6 +51,11 @@ inductive NTerm where
   | arrowLine (modName : String) (dL : NTerm) (cL : NTerm)
   | prodLine (fN sN : String) (fL : NTerm) (sL : NTerm)
   | boxLine (modName : String) (inL : NTerm)
+  | u64Ty
+  | u64Lit (val : UInt64)
+  | u64BinOp (op : BinOp64) (l r : NTerm)
+  | u64IfZero (c z nz : NTerm)
+  | u64Repeat (iters : UInt64) (varName : String) (init step : NTerm)
   deriving BEq, Repr, Inhabited
 
 namespace NTerm
@@ -101,6 +108,7 @@ def toCore (T : ModeTheory) (mode : ModeId) (locals : List String) : NTerm → N
       | "Bool" => .dataTy "Bool" []
       | "Unit" => .dataTy "Unit" []
       | "Empty" => .dataTy "Empty" []
+      | "U64" => .u64Ty
       | _ => .global name
   | .mvar id => .mvar id
   | .uu lvl => .uu lvl
@@ -155,6 +163,13 @@ def toCore (T : ModeTheory) (mode : ModeId) (locals : List String) : NTerm → N
   | .boxLine modStr inL =>
     let mp := resolveModTotal T mode modStr
     .boxLine Dir.hott mp (toCore T mp.dom locals inL)
+  | .u64Ty => .u64Ty
+  | .u64Lit w => .u64Lit w
+  | .u64BinOp op l r => .u64BinOp op (toCore T mode locals l) (toCore T mode locals r)
+  | .u64IfZero c z nz =>
+    .u64IfZero (toCore T mode locals c) (toCore T mode locals z) (toCore T mode locals nz)
+  | .u64Repeat iters varName init step =>
+    .u64Repeat iters (toCore T mode locals init) (toCore T mode (varName :: locals) step)
 
 end
 
@@ -235,6 +250,15 @@ syntax "arrowLine" "(" narya_tm "," narya_tm ")" : narya_tm
 syntax "prodLine" "(" narya_tm "," narya_tm ")" : narya_tm
 syntax "boxLine" "(" ident "," narya_tm ")" : narya_tm
 syntax "calc_eq" "(" narya_tm narya_calc_step* ")" : narya_tm
+syntax "u64" "(" num ")" : narya_tm
+syntax "u64_add" "(" narya_tm "," narya_tm ")" : narya_tm
+syntax "u64_sub" "(" narya_tm "," narya_tm ")" : narya_tm
+syntax "u64_mul" "(" narya_tm "," narya_tm ")" : narya_tm
+syntax "u64_and" "(" narya_tm "," narya_tm ")" : narya_tm
+syntax "u64_xor" "(" narya_tm "," narya_tm ")" : narya_tm
+syntax "u64_shr" "(" narya_tm "," narya_tm ")" : narya_tm
+syntax "u64_ifz" "(" narya_tm "," narya_tm "," narya_tm ")" : narya_tm
+syntax "u64_repeat" "(" num "," narya_tm "," ident " => " narya_tm ")" : narya_tm
 
 -- Juxtaposition application:
 syntax:70 narya_tm:70 ppSpace narya_tm:71 : narya_tm
@@ -342,6 +366,24 @@ macro_rules
     `(NTerm.prodLine "fst" "snd" (narya_ntm! $f) (narya_ntm! $s))
   | `(narya_ntm! boxLine($m:ident, $inner:narya_tm)) =>
     `(NTerm.boxLine $(quote m.getId.toString) (narya_ntm! $inner))
+  | `(narya_ntm! u64($n:num)) =>
+    `(NTerm.u64Lit (Nat.toUInt64 $n))
+  | `(narya_ntm! u64_add($a:narya_tm, $b:narya_tm)) =>
+    `(NTerm.u64BinOp BinOp64.add (narya_ntm! $a) (narya_ntm! $b))
+  | `(narya_ntm! u64_sub($a:narya_tm, $b:narya_tm)) =>
+    `(NTerm.u64BinOp BinOp64.sub (narya_ntm! $a) (narya_ntm! $b))
+  | `(narya_ntm! u64_mul($a:narya_tm, $b:narya_tm)) =>
+    `(NTerm.u64BinOp BinOp64.mul (narya_ntm! $a) (narya_ntm! $b))
+  | `(narya_ntm! u64_and($a:narya_tm, $b:narya_tm)) =>
+    `(NTerm.u64BinOp BinOp64.bitAnd (narya_ntm! $a) (narya_ntm! $b))
+  | `(narya_ntm! u64_xor($a:narya_tm, $b:narya_tm)) =>
+    `(NTerm.u64BinOp BinOp64.bitXor (narya_ntm! $a) (narya_ntm! $b))
+  | `(narya_ntm! u64_shr($a:narya_tm, $b:narya_tm)) =>
+    `(NTerm.u64BinOp BinOp64.shr (narya_ntm! $a) (narya_ntm! $b))
+  | `(narya_ntm! u64_ifz($c:narya_tm, $z:narya_tm, $nz:narya_tm)) =>
+    `(NTerm.u64IfZero (narya_ntm! $c) (narya_ntm! $z) (narya_ntm! $nz))
+  | `(narya_ntm! u64_repeat($cnt:num, $init:narya_tm, $v:ident => $step:narya_tm)) =>
+    `(NTerm.u64Repeat (Nat.toUInt64 $cnt) $(quote v.getId.toString) (narya_ntm! $init) (narya_ntm! $step))
   | `(narya_ntm! calc_eq($_:narya_tm $[$steps:narya_calc_step]*)) =>
     `(NTerm.foldCalcSteps [ $[narya_calc_step! $steps],* ])
   | `(narya_ntm! $fn:narya_tm $arg:narya_tm) =>
@@ -371,12 +413,27 @@ def formatEvalReport (G : GlobalEnv) (tm : Narya.Core.Term) : String :=
 
 syntax "#narya_check" "[" term "]" narya_tm : command
 syntax "#narya_eval" "[" term "]" narya_tm : command
+syntax "#narya_jit" "[" term "," term "]" narya_tm : command
+
+/-- Compile a `Narya.Core.Term` via `ThinEmitter` and execute it in-process via W^X `MAP_JIT`! -/
+def runJitReport (arg0 arg1 : UInt64) (tm : Narya.Core.Term) : IO String := do
+  if !ErasableCore [] tm then
+    return "[Narya JIT Error] Term is not in ErasableCore fragment"
+  let bytes := thinCompileCore tm
+  let nbeVal := (evalTerm 512 (abiGlobalEnv pureHoTT arg0 arg1) [] tm).force
+  match ← jitExecCore tm arg0 arg1 with
+  | .ok hw =>
+    return s!"[ThinEmitter MAP_JIT] {bytes.size} ARM64 bytes | x0 = {hw} | NbE = {prettyVal (abiGlobalEnv pureHoTT arg0 arg1) nbeVal}"
+  | .error err =>
+    return s!"[ThinEmitter] {bytes.size} ARM64 bytes (JIT unavailable: {err})"
 
 macro_rules
   | `(#narya_check [$G:term] $t:narya_tm) =>
     `(#eval IO.println (formatCheckReport $G (NTerm.toCore ($G).theory ($G).theory.defaultMode [] (narya_ntm! $t))))
   | `(#narya_eval [$G:term] $t:narya_tm) =>
     `(#eval IO.println (formatEvalReport $G (NTerm.toCore ($G).theory ($G).theory.defaultMode [] (narya_ntm! $t))))
+  | `(#narya_jit [$a0:term, $a1:term] $t:narya_tm) =>
+    `(#eval runJitReport $a0 $a1 (NTerm.toCore pureHoTT pureHoTT.defaultMode [] (narya_ntm! $t)) >>= IO.println)
 
 /-! ### Declarative `def_mode_theory` Macro -/
 
