@@ -239,4 +239,25 @@ theorem tour_nestedLoop_sample :
   rw [Arm64.compileFullPipeline_correct]
   decide
 
+/-! ## 6. Proof-Carrying `narya_hoTT!` Term Erased & Verified Down to `Arm64.exec` -/
+
+/-- Written directly in the Lean 4 `narya_hoTT!` macro DSL: binds a HoTT univalence `Glue`
+    proof at `0`-graded unused position around a 111-step Collatz `u64_repeat` hardware loop! -/
+def tourProofCarryingCollatz : Narya.Core.Term :=
+  narya_hoTT!
+    let ua : Id(Type, Bool, Bool) := Glue(Bool, Bool, notEquiv) ;
+    u64_repeat(111, arg0, n =>
+      u64_ifz(u64_and(n, u64(1)),
+        u64_shr(n, u64(1)),
+        u64_add(u64_mul(n, u64(3)), u64(1))))
+
+theorem tour_proofCarryingCollatz_erasable :
+    ErasableCore [] tourProofCarryingCollatz = true := by decide
+
+theorem tour_proofCarryingCollatz_nbe_eq_arm64 (seed : UInt64) :
+    (evalTerm 512 (abiGlobalEnv pureHoTT seed 0) [] tourProofCarryingCollatz).force =
+      .u64Lit ((Arm64.exec (Arm64.compileFullPipeline (HIR.eraseFromCore tourProofCarryingCollatz))
+                           (Arm64State.initABI seed 0)).x0) :=
+  core_nbe_to_arm64_correct pureHoTT seed 0 tour_proofCarryingCollatz_erasable (by decide)
+
 end Narya.Examples

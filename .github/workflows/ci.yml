@@ -6,9 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-and-test:
-    name: Build, Test Native AArch64 & Verify Zero-Sorry
+    name: Build, Test Native AArch64 MAP_JIT, Merkle Build & Verify Zero-Sorry
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout repository
@@ -20,12 +23,23 @@ jobs:
           cc --version
           command -v rg >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y ripgrep)
 
-      - name: Build & Test with Lean 4 (Native AArch64)
+      - name: Build & Test with Lean 4 (Native AArch64 + W^X mprotect JIT)
         uses: leanprover/lean-action@v1
         with:
           auto-config: false
           build: true
           test: true
+
+      - name: Exercise Merkle Package Builder, Profiler, ThinEmitter JIT & Benchmarks
+        run: |
+          lake exe narya build stdlib --rebuild
+          lake exe narya build stdlib | tee /tmp/narya_cached_build.txt
+          rg "0 built, 4 cached" /tmp/narya_cached_build.txt
+          lake exe narya profile stdlib/collatz.ny --json /tmp/narya_trace.json --folded /tmp/narya.folded
+          test -s /tmp/narya_trace.json
+          test -s /tmp/narya.folded
+          lake exe narya jit
+          lake exe narya bench
 
       - name: Verify Zero Sorry & Zero Noncomputable
         run: |

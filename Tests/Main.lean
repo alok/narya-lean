@@ -13,7 +13,7 @@ import Narya
 
 open Narya.Dim Narya.Modal Narya.Modal.Combinators Narya.Modal.KeySynth
 open Narya.Core Narya.Core.Safety Narya.Core.Unify Narya.Core.Level Narya.Core.Linear
-open Narya.Syntax Narya.Elab Narya.Fast Narya.Compiler Narya.Compiler.ThinEmitter Narya.Examples
+open Narya.Syntax Narya.Elab Narya.Fast Narya.Compiler Narya.Compiler.ThinEmitter Narya.Meta Narya.Examples
 
 structure TestState where
   passed : Nat := 0
@@ -560,6 +560,87 @@ def runSorbetInetThinJitTests (st : IO.Ref TestState) : IO Unit := do
   assertCond st s!"ThinEmitter + MAP_JIT latency: 100 full compile+JIT runs in {dtNs / 1000} µs ({avgUs} µs/compile+run)!"
     (acc == 100 && dtNs < 50000000)
 
+def runProfilerAndBuildTests (st : IO.Ref TestState) : IO Unit := do
+  IO.println "── Suite 8: Phase/Allocation Profiler, Chrome/Flamegraph Export & Lake-Style Merkle Builder ──"
+  -- 1. `Profiler` spans, heap allocation ticks, Chrome Trace JSON & Brendan Gregg `.folded` export
+  let profRef ← ProfileState.newRef
+  let sampleSrc := "(theory pure_hott)\n(def idB (arrow Bool Bool) (fun b b))\n(eval (idB true))\n"
+  let pRes ← profileScriptWithEnv profRef (GlobalEnv.withStdPrelude pureHoTT) sampleSrc "sample.ny"
+  let pSt ← profRef.get
+  let chromeJson := pSt.exportChromeTraceJson
+  let foldedTxt := pSt.exportFoldedFlamegraph
+  let reportTxt := pSt.renderReport "Test Profile"
+  assertCond st "Profiler records hierarchical spans + heap allocs & exports Chrome Trace JSON + .folded flamegraph"
+    (pRes.isOk && pSt.spans.size >= 4 &&
+     (chromeJson.splitOn "\"traceEvents\"").length > 1 &&
+     (chromeJson.splitOn "\"alloc_heartbeats\"").length > 1 &&
+     (foldedTxt.splitOn "module:sample.ny;typecheck:idB").length > 1 &&
+     (reportTxt.splitOn "Heap Allocs").length > 1)
+
+  -- 2. Full rebuild of `stdlib` (`narya.toml` + 4 `.ny` modules) + `.arm64.bin` native cache emission
+  let rebuildRes ← buildPackage "stdlib" (forceRebuild := true)
+  let rebuildOk ← match rebuildRes with
+    | .error err =>
+      IO.eprintln s!"    stdlib rebuild error: {err}"
+      pure false
+    | .ok br => do
+      let collatzBin : System.FilePath := "stdlib/.narya/build/collatz__collatz111.arm64.bin"
+      let binExists ← collatzBin.pathExists
+      let mut diskJitOk := true
+      if binExists && (← jitSupported) then
+        let diskBytes ← IO.FS.readBinFile collatzBin
+        let hwVal ← jitRunU64 diskBytes 27 0
+        diskJitOk := (hwVal == 1)
+      pure (br.moduleOrder == ["core", "univalence", "collatz", "linear"] &&
+            br.rebuiltMods.length == 4 &&
+            br.cachedMods.isEmpty &&
+            br.emittedBins.length == 2 &&
+            binExists && diskJitOk)
+  assertCond st "Lake-style buildPackage ('stdlib' --rebuild): DAG order, 2 .arm64.bin artifacts & disk->MAP_JIT(27)==1"
+    rebuildOk
+
+  -- 3. Immediate incremental build of `stdlib`: 100% Merkle `BuildTrace` cache hit (`0 built, 4 cached`)!
+  let cachedRes ← buildPackage "stdlib" (forceRebuild := false)
+  let cachedOk := match cachedRes with
+    | .error _ => false
+    | .ok br =>
+      br.rebuiltMods.isEmpty &&
+      br.cachedMods == ["core", "univalence", "collatz", "linear"] &&
+      br.profile.counters.cacheHits == 4 &&
+      br.profile.counters.cacheMisses == 0
+  assertCond st "Lake-style buildPackage ('stdlib' incremental): 4/4 Merkle BuildTrace cache hits (0 rebuilt)"
+    cachedOk
+
+  -- 4. `resolveModuleDAG` rejects circular module imports with explicit cycle path!
+  let cycDir : System.FilePath := s!"/tmp/narya_cycle_{← IO.monoNanosNow}"
+  IO.FS.createDirAll cycDir
+  IO.FS.writeFile (cycDir / "a.ny") "(import \"b\")\n(def x Bool true)\n"
+  IO.FS.writeFile (cycDir / "b.ny") "(import \"a\")\n(def y Bool false)\n"
+  let cycRes ← resolveModuleDAG cycDir ["a"]
+  try IO.FS.removeFile (cycDir / "a.ny") catch _ => pure ()
+  try IO.FS.removeFile (cycDir / "b.ny") catch _ => pure ()
+  try IO.FS.removeDir cycDir catch _ => pure ()
+  let cycRejected := match cycRes with
+    | .error msg => (msg.splitOn "Import cycle detected").length > 1
+    | .ok _ => false
+  assertCond st "resolveModuleDAG detects and rejects circular module imports (a -> b -> a)"
+    cycRejected
+
+  -- 5. Standalone `.ny` QTT/LNL `1`-linearity & `Ghost0` `0`-erasure rejection + `(solve ...)` hole synthesis!
+  let badDupRes := runScript pureHoTT "(theory linear_adjoint)\n(def badDup (arrow U64 U64) (fun x (u64_add x x)))\n"
+  let badGhostRes := runScript pureHoTT "(theory linear_adjoint)\n(def badGhost (pi g Ghost0 U64 U64) (lam g Ghost0 g))\n"
+  let goodSolveRes := runScript pureHoTT "(def idB (arrow Bool Bool) (fun b b))\n(solve 0 (idB ?) false)\n"
+  let solveOk := match goodSolveRes with
+    | .ok (_, logs) => logs.any (fun l => (l.splitOn "?0 := false").length > 1)
+    | .error _ => false
+  assertCond st "Surface .ny runner rejects 1-grade contraction, rejects Ghost0 runtime read, and solves ?0 := false"
+    (!badDupRes.isOk && !badGhostRes.isOk && solveOk)
+
+  -- 6. `#narya_jit` / `runJitReport` executes `tourProofCarryingCollatz` (with erased Glue univalence proof)!
+  let jitRep ← runJitReport 27 0 tourProofCarryingCollatz
+  assertCond st "DSL `runJitReport` (`#narya_jit`) erases Glue proof & runs 111-step Collatz via MAP_JIT (x0 = 1)"
+    ((jitRep.splitOn "x0 = 1").length > 1 && (jitRep.splitOn "NbE = 1u64").length > 1)
+
 def main : IO UInt32 := do
   IO.println "╔══════════════════════════════════════════════════════════════════════════╗"
   IO.println "║  Narya-Lean Verification & Native Apple Silicon Test Suite (`lake test`) ║"
@@ -572,6 +653,7 @@ def main : IO UInt32 := do
   runSyntaxAndDSLTests st
   runNativeArm64Tests st
   runSorbetInetThinJitTests st
+  runProfilerAndBuildTests st
   let final ← st.get
   IO.println "────────────────────────────────────────────────────────────────────────────"
   IO.println s!"Total: {final.passed + final.failed} assertions | Passed: {final.passed} | Failed: {final.failed}"
