@@ -62,9 +62,12 @@ def mentionsData (dName : String) : Term → Bool
   | .tuple fs => mentionsDataTuple dName fs
   | .proj sub _ => mentionsData dName sub
   | .dataTy n ps => strEq n dName || mentionsDataList dName ps
-  | .ctor dn _ args => strEq dn dName || mentionsDataList dName args
+  | .ctor dn _ args | .pctor dn _ args => strEq dn dName || mentionsDataList dName args
   | .matchData s _ m bs =>
     mentionsData dName s || mentionsData dName m || mentionsDataBranches dName bs
+  | .elimHIT dn m pts pas s =>
+    strEq dn dName || mentionsData dName m || mentionsDataBranches dName pts ||
+    mentionsDataBranches dName pas || mentionsData dName s
   | .obsEq _ ty es => mentionsData dName ty || mentionsDataList dName es
   | .obsHet _ tb es => mentionsData dName tb || mentionsDataList dName es
   | .refl _ s | .sym _ s | .ungel _ s => mentionsData dName s

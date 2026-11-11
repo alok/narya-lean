@@ -53,6 +53,9 @@ inductive Elim where
   | trl (g : Dir) (tyLine : Val)
   | matchData (winMod : ModPath) (motive : Val)
       (branches : List (String × Nat × Term)) (env : List Val)
+  | elimHIT (dataName : String) (motive : Val)
+      (ptBranches : List (String × Nat × Term))
+      (pathBranches : List (String × Nat × Term)) (env : List Val)
   | pathJ (g : Dir) (ty : Val) (base : Val) (motive : Val) (reflCase : Val) (target : Val)
   | hap (g : Dir) (a₀ a₁ pa : Val)
   | u64BinOpL (op : BinOp64) (rhs : Val)
@@ -87,6 +90,10 @@ inductive Val where
   | dataTy (name : String) (params : List Val)
   /-- Inductive constructor `Ctor dataName ctorName args`. -/
   | ctor (dataName : String) (ctorName : String) (args : List Val)
+  /-- Canonical 1-cell path constructor `pctor dataName pctorName args` of a Higher Inductive Type. -/
+  | pctor (dataName : String) (pctorName : String) (args : List Val)
+  /-- Formal inverse `sym g (pctor dataName pctorName args)` of a HIT path constructor. -/
+  | invPctor (g : Dir) (dataName : String) (pctorName : String) (args : List Val)
   /-- Homogeneous observational bridge/path type (when `ty` is neutral or atomic). -/
   | obsEq (g : Dir) (ty : Val) (ends : List Val)
   /-- Heterogeneous observational bridge/path type (when `tyBridge` is neutral). -/

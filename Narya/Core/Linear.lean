@@ -107,9 +107,12 @@ def varUsageAux : Term → Ix → UsageGrade
     UsageGrade.add (varUsageAux scrut ix) (varUsageAux body (ix + 1))
   | .tuple fs, ix => varUsageTuple fs ix
   | .proj sub _, ix => varUsageAux sub ix
-  | .ctor _ _ args, ix => varUsageList args ix
+  | .ctor _ _ args, ix | .pctor _ _ args, ix => varUsageList args ix
   | .matchData scrut _ _ branches, ix =>
     UsageGrade.add (varUsageAux scrut ix) (varUsageBranches branches ix)
+  | .elimHIT _ _ ptBranches pathBranches scrut, ix =>
+    UsageGrade.add (varUsageAux scrut ix)
+      (UsageGrade.lub (varUsageBranches ptBranches ix) (varUsageBranches pathBranches ix))
   | .sym _ p, ix | .ungel _ p, ix => varUsageAux p ix
   | .ap _ _ a, ix | .trr _ _ a, ix | .trl _ _ a, ix | .liftr _ _ a, ix | .liftl _ _ a, ix =>
     varUsageAux a ix

@@ -429,7 +429,19 @@ def linearAdjointTheory : ModeTheory :=
     defaultMode := "Lin"
     linearModes := ["Lin"] }
 
-/-- Complete catalog of all 21 first-class mode theories available out of the box. -/
+/-- 22. **Directed $(\infty, 1)$-Category Mode Theory (`directedCat`)**:
+    - Mode `"Cat"` supports BOTH symmetric HoTT isomorphism paths (`Dir.hott`) AND non-symmetric
+      covariant directed morphisms (`Dir.directed` / `Hom_A a b`).
+    - Mode `"Space"` is the core $\infty$-groupoid mode where `Dir.directed` is discretized!
+    - Sinister adjunction `inclCat ⊣ coreGrp` (`inclCat : Space → Cat` embeds $\infty$-groupoids into
+      $(\infty, 1)$-categories; `coreGrp : Cat → Space` extracts the maximal Kan $\infty$-groupoid core
+      by discarding non-invertible directed morphisms `discreteDirs := [Dir.directed]`)! -/
+def directedCatTheory : ModeTheory :=
+  adjunctionNamed "directed_cat" "Space" "Cat" "inclCat" "coreGrp" "η_cat" "ε_cat"
+    { tangible := true, pellucid := true, sinister := true, discreteDirs := [.directed] }
+    { tangible := true, pellucid := true, translucent := true, discreteDirs := [.directed] }
+
+/-- Complete catalog of all 22 first-class mode theories available out of the box. -/
 def standardCatalog : List ModeTheory :=
   [ pureHoTT
   , functorTheory
@@ -451,7 +463,8 @@ def standardCatalog : List ModeTheory :=
   , externalParamTheory
   , displayedTheory
   , perfectibleOptTheory
-  , linearAdjointTheory ]
+  , linearAdjointTheory
+  , directedCatTheory ]
 
 /-! ### Machine-Checked Well-Formedness Certificates (`zero sorry`) -/
 
@@ -470,6 +483,8 @@ theorem displayedTheory_wf : displayedTheory.wf = true := by decide
 theorem perfectibleOptTheory_wf : perfectibleOptTheory.wf = true := by decide
 
 theorem linearAdjointTheory_wf : linearAdjointTheory.wf = true := by decide
+
+theorem directedCatTheory_wf : directedCatTheory.wf = true := by decide
 
 theorem standardCatalog_all_wf : (standardCatalog.all ModeTheory.wf) = true := by decide
 

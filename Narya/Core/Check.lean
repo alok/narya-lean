@@ -316,6 +316,36 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
             let args' ← checkTeleArgs fuel' G Γ [] cSpec.argTys args
             .ok (.ctor dName cName args', .dataTy dName [])
 
+    | .pctor dName pName args =>
+      match G.lookupData? dName with
+      | none => .error s!"Unknown HIT datatype '{dName}'"
+      | some spec =>
+        match spec.pathCtors.find? (fun p => strEq p.name pName) with
+        | none => .error s!"Unknown path constructor '{dName}.{pName}'"
+        | some pSpec =>
+          if args.length != pSpec.argTys.length then
+            .error s!"Path constructor '{dName}.{pName}' expects {pSpec.argTys.length} args, got {args.length}"
+          else do
+            let args' ← checkTeleArgs fuel' G Γ [] pSpec.argTys args
+            let argVals := args'.map (evalTerm fuel' G Γ.idEnv)
+            let lhsVal := evalTerm fuel' G argVals.reverse pSpec.lhs
+            let rhsVal := evalTerm fuel' G argVals.reverse pSpec.rhs
+            .ok (.pctor dName pName args', evalObsEq fuel' G pSpec.dir (.dataTy dName []) [lhsVal, rhsVal])
+
+    | .elimHIT dName motive ptBranches pathBranches scrut =>
+      match G.lookupData? dName with
+      | none => .error s!"Unknown HIT datatype '{dName}' in elimHIT"
+      | some spec => do
+        let idM := ModPath.id Γ.mode
+        let scrut' ← checkTerm fuel' G Γ scrut (.dataTy dName [])
+        let (motive', motU) ← synthTerm fuel' G (Γ.extend "_hit" idM (.dataTy dName [])) motive
+        let _ ← ensureUniverse motU
+        let ptBranches' ← checkMatchBranches fuel' G Γ dName spec idM motive' ptBranches
+        let pathBranches' ← checkHITPathBranches fuel' G Γ dName spec motive' ptBranches' pathBranches
+        let scrutVal := evalTerm fuel' G Γ.idEnv scrut'
+        let outTy := evalTerm fuel' G (scrutVal :: Γ.idEnv) motive'
+        .ok (.elimHIT dName motive' ptBranches' pathBranches' scrut', outTy)
+
     | .matchData scrut winMod motive branches => do
       if !winMod.flags.tangible then
         .error s!"Window modality {winMod.pretty} is not tangible!"
@@ -366,8 +396,8 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
       .ok (.refl g sub', evalObsEq fuel' G g subTy ends)
 
     | .sym g p =>
-      if g.arity != 2 then
-        .error s!"Symmetry requires a binary direction (arity 2), got arity {g.arity}"
+      if g.arity != 2 || !g.symmetric then
+        .error s!"Symmetry requires a symmetric binary direction, got {reprStr g}"
       else do
         let (p', pTy) ← synthTerm fuel' G Γ p
         match pTy.force with
@@ -439,8 +469,8 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
         | other => .error s!"trr expects a path of types ObsEq .hott UU [A₀, A₁], got: {reprStr other}"
 
     | .trl g tyL x₁ =>
-      if !g.fibrant || g.arity != 2 then
-        .error s!"Backward transport trl requires a fibrant binary HoTT direction, got {reprStr g}"
+      if !g.bwdFibrant || g.arity != 2 then
+        .error s!"Backward transport trl requires a backward-fibrant binary direction, got {reprStr g}"
       else do
         let (tyL', tyLTy) ← synthTerm fuel' G Γ tyL
         match tyLTy.force with
@@ -468,8 +498,8 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
         | other => .error s!"liftr expects a path of types, got: {reprStr other}"
 
     | .liftl g tyL x₁ =>
-      if !g.fibrant || g.arity != 2 then
-        .error s!"Backward path lift liftl requires a fibrant binary HoTT direction, got {reprStr g}"
+      if !g.bwdFibrant || g.arity != 2 then
+        .error s!"Backward path lift liftl requires a backward-fibrant binary direction, got {reprStr g}"
       else do
         let (tyL', tyLTy) ← synthTerm fuel' G Γ tyL
         match tyLTy.force with
@@ -484,8 +514,8 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
         | other => .error s!"liftl expects a path of types, got: {reprStr other}"
 
     | .trans g p q =>
-      if !g.fibrant || g.arity != 2 then
-        .error s!"Path composition trans requires a fibrant binary HoTT direction, got {reprStr g}"
+      if (!g.fibrant && !g.bwdFibrant) || g.arity != 2 then
+        .error s!"Path/morphism composition trans requires a fibrant or directed binary direction, got {reprStr g}"
       else do
         let (p', pTy) ← synthTerm fuel' G Γ p
         let (q', qTy) ← synthTerm fuel' G Γ q
@@ -646,8 +676,8 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
         | _ => .error "boxLine innerLine must synthesize a binary type path"
 
     | .pathJ g ty base motive reflCase target path =>
-      if !g.fibrant || g.arity != 2 then
-        .error s!"Path induction J requires a fibrant HoTT direction, got {reprStr g}"
+      if !g.fibrant || !g.bwdFibrant || !g.symmetric || g.arity != 2 then
+        .error s!"Undirected path induction J requires a symmetric 2-sided fibrant HoTT direction, got {reprStr g}"
       else do
         let (ty', tyU) ← synthTerm fuel' G Γ ty
         let _ ← ensureUniverse tyU
@@ -921,6 +951,41 @@ def checkMatchBranches (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx)
           let body' ← checkTerm fuel' G ΓBranch body branchTarget
           let rest' ← checkMatchBranches fuel' G Γ dName spec winMod motive rest
           .ok ((cName, arity, body') :: rest')
+
+def checkHITPathBranches (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx)
+    (dName : String) (spec : DataSpec) (motive : Term)
+    (ptBranches : List (String × Nat × Term)) :
+    List (String × Nat × Term) → CheckM (List (String × Nat × Term))
+  | [] => .ok []
+  | (pName, arity, pBody) :: rest =>
+    match fuel with
+    | 0 => .error "Out of fuel"
+    | fuel' + 1 =>
+      match spec.pathCtors.find? (fun p => strEq p.name pName) with
+      | none => .error s!"Unknown path constructor '{pName}' in elimHIT on '{dName}'"
+      | some pSpec =>
+        if arity != pSpec.argTys.length then
+          .error s!"Path branch '{pName}' has arity {arity}, expected {pSpec.argTys.length}"
+        else do
+          let idM := ModPath.id Γ.mode
+          let (ΓPath, pathArgs) ← extendBranchArgs fuel' G Γ idM [] pSpec.argTys
+          let lhsVal := evalTerm fuel' G pathArgs.reverse pSpec.lhs
+          let rhsVal := evalTerm fuel' G pathArgs.reverse pSpec.rhs
+          let motVal := evalTerm fuel' G (Val.vvar Γ.length :: Γ.idEnv) motive
+          let motLhs := evalTerm fuel' G (lhsVal :: Γ.idEnv) motive
+          let motRhs := evalTerm fuel' G (rhsVal :: Γ.idEnv) motive
+          let elimLhs := evalElimHIT fuel' G dName motVal ptBranches [] Γ.idEnv lhsVal
+          let elimRhs := evalElimHIT fuel' G dName motVal ptBranches [] Γ.idEnv rhsVal
+          let expectedPathTy : Val :=
+            if equalVal fuel' G ΓPath.length motLhs motRhs then
+              evalObsEq fuel' G pSpec.dir motLhs [elimLhs, elimRhs]
+            else
+              let motFn : Val := .lam "_hit" idM (.mk Γ.idEnv motive)
+              let motBridge := evalAp fuel' G pSpec.dir motFn (.pctor dName pName pathArgs)
+              evalObsHet fuel' G pSpec.dir motBridge [elimLhs, elimRhs]
+          let pBody' ← checkTerm fuel' G ΓPath pBody expectedPathTy
+          let rest' ← checkHITPathBranches fuel' G Γ dName spec motive ptBranches rest
+          .ok ((pName, arity, pBody') :: rest')
 
 def extendBranchArgs (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (winMod : ModPath)
     (accArgs : List Val) : List Term → CheckM (MTTCtx × List Val)

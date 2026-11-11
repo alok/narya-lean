@@ -90,8 +90,8 @@ def runPackedAndTimeMTests (st : IO.Ref TestState) : IO Unit := do
 
 def runModalTests (st : IO.Ref TestState) : IO Unit := do
   IO.println "── Suite 3: 2-Categorical Mode Combinators & Key Synthesis (`Narya.Modal`) ──"
-  assertCond st "All 21 standard mode theories in catalog are well-formed (wf = true)"
-    (standardCatalog.all ModeTheory.wf && standardCatalog.length == 21)
+  assertCond st "All 22 standard mode theories in catalog are well-formed (wf = true)"
+    (standardCatalog.all ModeTheory.wf && standardCatalog.length == 22)
 
   let adj := adjunctionTheory
   let dual2 := opposite2Cat "adjunction" (opposite2Cat "dual1" adj)
@@ -641,6 +641,74 @@ def runProfilerAndBuildTests (st : IO.Ref TestState) : IO Unit := do
   assertCond st "DSL `runJitReport` (`#narya_jit`) erases Glue proof & runs 111-step Collatz via MAP_JIT (x0 = 1)"
     ((jitRep.splitOn "x0 = 1").length > 1 && (jitRep.splitOn "NbE = 1u64").length > 1)
 
+def runFrontierTheoryTests (st : IO.Ref TestState) : IO Unit := do
+  IO.println "── Suite 9: 5 Open HOTT/Narya Theory Frontiers (`HIT`, `Directed`, `Squares`, `RelTransfer`, `Canonicity`) ──"
+  -- 1. Frontier 1 (`HIT`): Circle S1 winding numbers 0, +1, +2, +5, -1, -2, -4 via interval-free Glue NbE!
+  let s1Ok :=
+    (evalTerm 64 HIT.s1GlobalEnv [] (HIT.encodeLoopApp (HIT.loopPow 0))).force == HIT.intPosVal 0 &&
+    (evalTerm 64 HIT.s1GlobalEnv [] (HIT.encodeLoopApp (HIT.loopPow 1))).force == HIT.intPosVal 1 &&
+    (evalTerm 64 HIT.s1GlobalEnv [] (HIT.encodeLoopApp (HIT.loopPow 5))).force == HIT.intPosVal 5 &&
+    (evalTerm 64 HIT.s1GlobalEnv [] (HIT.encodeLoopApp (HIT.invLoopPow 0))).force == HIT.intNegSuccVal 0 &&
+    (evalTerm 64 HIT.s1GlobalEnv [] (HIT.encodeLoopApp (HIT.invLoopPow 3))).force == HIT.intNegSuccVal 3 &&
+    HIT.checkFast HIT.s1GlobalEnv HIT.circleCodeTm
+      (.pi "x" HIT.idHoTT (.dataTy "S1" []) (.uu 0)) &&
+    HIT.checkFast HIT.s1GlobalEnv HIT.circleEncodeTm
+      (.pi "p" HIT.idHoTT (.obsEq .hott (.dataTy "S1" []) [HIT.baseTm, HIT.baseTm]) (.dataTy "Int" []))
+  assertCond st "Frontier 1 (HIT): π₁(S¹) ≅ ℤ computes winding numbers 0, +1, +5, -1, -4 without an interval!"
+    s1Ok
+
+  -- 2. Frontier 2 (`Directed`): CovGlue forward transport without inverse + variance rejection + Covariant Yoneda!
+  let dirLine := Directed.covGlue .u64Ty (.dataTy "Bool" []) (.global "isZeroFn")
+  let compHom := Term.trans .directed (.pctor "Delta2" "f01" []) (.pctor "Delta2" "f12" [])
+  let yonedaVal := (evalTerm 48 Directed.directedGlobalEnv []
+    (.trr .directed (.ap .directed Directed.stepFamTm compHom) (.u64Lit 0))).force
+  let dirOk :=
+    (evalTerm 32 Directed.directedGlobalEnv [] (.trr .directed dirLine (.u64Lit 0))).force ==
+      .ctor "Bool" "true" [] &&
+    (evalTerm 32 Directed.directedGlobalEnv [] (.trr .directed dirLine (.u64Lit 42))).force ==
+      .ctor "Bool" "false" [] &&
+    !Directed.synthDirFast (.sym .directed (.pctor "Delta1" "seg" [])) &&
+    !Directed.synthDirFast (.trl .directed dirLine (.ctor "Bool" "true" [])) &&
+    yonedaVal == .ctor "Bool" "false" []
+  assertCond st "Frontier 2 (Directed HOTT): CovGlue forward transport, sym/trl rejection, & Covariant Yoneda on Δ²!"
+    dirOk
+
+  -- 3. Frontier 3 (`Squares`): 9-face 2D Square TubeOf plug + Kan lid regularity + two-sided refl η-conversion!
+  let sq := Squares.mkSquare2D (0 : Nat) 1 2 3 10 11 12 13 99
+  let z := Term.ctor "Nat" "zero" []
+  let GHoTT := GlobalEnv.withStdPrelude pureHoTT
+  let loopTy := Term.obsEq .hott (.dataTy "Nat" []) [z, z]
+  let arrTyVal := evalTerm 32 GHoTT [] (.pi "p" Squares.idHoTT loopTy loopTy)
+  let idFn := evalTerm 32 GHoTT [] (.lam "p" Squares.idHoTT (.bvar 0))
+  let leftReflFn := evalTerm 32 GHoTT [] (.lam "p" Squares.idHoTT (.trans .hott (.refl .hott z) (.bvar 0)))
+  let rightReflFn := evalTerm 32 GHoTT [] (.lam "p" Squares.idHoTT (.trans .hott (.bvar 0) (.refl .hott z)))
+  let sqOk :=
+    (CubeOf.toList sq).length == 9 &&
+    CubeOf.toList ((TubeOf.boundary sq).plug (CubeOf.findTop sq)) == CubeOf.toList sq &&
+    evalTerm 16 GHoTT [.u64Lit 7]
+      (Squares.kanOpenBoxLid (.refl .hott (.bvar 0)) (.refl .hott (.bvar 0)) (.refl .hott (.bvar 0))) ==
+      .refl .hott (.u64Lit 7) &&
+    equalAt 32 GHoTT 0 arrTyVal leftReflFn idFn &&
+    equalAt 32 GHoTT 0 arrTyVal rightReflFn idFn
+  assertCond st "Frontier 3 (2D Squares): 9-face CubeOf/TubeOf plug, strict Kan lid regularity & 2-sided refl η!"
+    sqOk
+
+  -- 4. Frontier 4 (`RelTransfer`): NatU64Gel unary Peano Nat <-> U64 <-> ThinEmitter MAP_JIT execution!
+  let unarySum := applyVal 128 RelTransfer.relGlobalEnv (.neu (.potential "toU64") [])
+    RelTransfer.idLogic (RelTransfer.natSem (7 + 9))
+  let bridgeHir := HIR.eraseFromCore RelTransfer.fastAddWithGelBridge
+  let mut bridgeHwOk := (Arm64.exec (Arm64.compileFullPipeline bridgeHir) (Arm64State.initABI 7 9)).x0 == 16
+  if ← jitSupported then
+    let hwRes ← jitExecHIR bridgeHir 7 9
+    bridgeHwOk := bridgeHwOk && (hwRes.toOption == some 16)
+  assertCond st "Frontier 4 (RelTransfer): NatU64Gel unary Peano Nat (7+9) refines to ThinEmitter MAP_JIT x0 == 16!"
+    (unarySum == .u64Lit 16 && bridgeHwOk)
+
+  -- 5. Frontier 5 (`Canonicity`): Tait-Girard closed Univalent + Modal Canonicity evaluator!
+  let canonRes := Canonicity.evalCanon 32 [] Canonicity.higherOrderUnivalentSample
+  assertCond st "Frontier 5 (Canonicity): Closed higher-order Glue + arrowLine + prodLine + boxLine ~> 117u64!"
+    (canonRes == some (.vu64 117))
+
 def main : IO UInt32 := do
   IO.println "╔══════════════════════════════════════════════════════════════════════════╗"
   IO.println "║  Narya-Lean Verification & Native Apple Silicon Test Suite (`lake test`) ║"
@@ -654,6 +722,7 @@ def main : IO UInt32 := do
   runNativeArm64Tests st
   runSorbetInetThinJitTests st
   runProfilerAndBuildTests st
+  runFrontierTheoryTests st
   let final ← st.get
   IO.println "────────────────────────────────────────────────────────────────────────────"
   IO.println s!"Total: {final.passed + final.failed} assertions | Passed: {final.passed} | Failed: {final.failed}"

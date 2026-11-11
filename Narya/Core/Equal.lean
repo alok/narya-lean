@@ -16,6 +16,58 @@ namespace Narya.Core
 
 open Narya.Dim Narya.Modal Narya.Modal.KeySynth
 
+/-- Build `[vvar (base + k - 1), ..., vvar base]` for opening an `arity`-binder branch body in NbE. -/
+def freshBranchVars (base : Nat) : Nat → List Val
+  | 0 => []
+  | k + 1 => freshBranchVars (base + 1) k ++ [.vvar base]
+
+/-- Kernel-reducible α-structural `Term` equality fast-path (fuel-bounded so Lean 4 compiles it
+    via `Nat.rec` rather than opaque `partial` `instBEqTerm.beq`, preventing divergence when
+    comparing neutral `matchData`/`elimHIT` branches that invoke recursive `.potential` globals). -/
+def termFastEq : Nat → Term → Term → Bool
+  | 0, _, _ => false
+  | fuel + 1, t₁, t₂ =>
+    match t₁, t₂ with
+    | .bvar i₁, .bvar i₂ => i₁ == i₂
+    | .mvar i₁, .mvar i₂ => i₁ == i₂
+    | .global n₁, .global n₂ => strEq n₁ n₂
+    | .uu l₁, .uu l₂ => l₁ == l₂
+    | .uuExt l₁, .uuExt l₂ => l₁ == l₂
+    | .pi _ m₁ d₁ c₁, .pi _ m₂ d₂ c₂ =>
+      decide (m₁ = m₂) && termFastEq fuel d₁ d₂ && termFastEq fuel c₁ c₂
+    | .lam _ m₁ b₁, .lam _ m₂ b₂ =>
+      decide (m₁ = m₂) && termFastEq fuel b₁ b₂
+    | .app f₁ m₁ a₁, .app f₂ m₂ a₂ =>
+      decide (m₁ = m₂) && termFastEq fuel f₁ f₂ && termFastEq fuel a₁ a₂
+    | .letIn _ ty₁ v₁ b₁, .letIn _ ty₂ v₂ b₂ =>
+      termFastEq fuel ty₁ ty₂ && termFastEq fuel v₁ v₂ && termFastEq fuel b₁ b₂
+    | .modalBox m₁ a₁, .modalBox m₂ a₂ => decide (m₁ = m₂) && termFastEq fuel a₁ a₂
+    | .boxIntro m₁ a₁, .boxIntro m₂ a₂ => decide (m₁ = m₂) && termFastEq fuel a₁ a₂
+    | .proj s₁ f₁, .proj s₂ f₂ => strEq f₁ f₂ && termFastEq fuel s₁ s₂
+    | .dataTy n₁ [], .dataTy n₂ [] => strEq n₁ n₂
+    | .ctor d₁ c₁ [], .ctor d₂ c₂ [] => strEq d₁ d₂ && strEq c₁ c₂
+    | .ctor d₁ c₁ [x₁], .ctor d₂ c₂ [x₂] =>
+      strEq d₁ d₂ && strEq c₁ c₂ && termFastEq fuel x₁ x₂
+    | .pctor d₁ p₁ [], .pctor d₂ p₂ [] => strEq d₁ d₂ && strEq p₁ p₂
+    | .refl g₁ a₁, .refl g₂ a₂ => decide (g₁ = g₂) && termFastEq fuel a₁ a₂
+    | .sym g₁ a₁, .sym g₂ a₂ => decide (g₁ = g₂) && termFastEq fuel a₁ a₂
+    | .ungel g₁ a₁, .ungel g₂ a₂ => decide (g₁ = g₂) && termFastEq fuel a₁ a₂
+    | .ap g₁ f₁ a₁, .ap g₂ f₂ a₂ =>
+      decide (g₁ = g₂) && termFastEq fuel f₁ f₂ && termFastEq fuel a₁ a₂
+    | .trr g₁ f₁ a₁, .trr g₂ f₂ a₂ =>
+      decide (g₁ = g₂) && termFastEq fuel f₁ f₂ && termFastEq fuel a₁ a₂
+    | .trl g₁ f₁ a₁, .trl g₂ f₂ a₂ =>
+      decide (g₁ = g₂) && termFastEq fuel f₁ f₂ && termFastEq fuel a₁ a₂
+    | .trans g₁ f₁ a₁, .trans g₂ f₂ a₂ =>
+      decide (g₁ = g₂) && termFastEq fuel f₁ f₂ && termFastEq fuel a₁ a₂
+    | .u64Ty, .u64Ty => true
+    | .u64Lit a₁, .u64Lit a₂ => a₁ == a₂
+    | .u64BinOp op₁ l₁ r₁, .u64BinOp op₂ l₂ r₂ =>
+      decide (op₁ = op₂) && termFastEq fuel l₁ l₂ && termFastEq fuel r₁ r₂
+    | .u64IfZero c₁ z₁ nz₁, .u64IfZero c₂ z₂ nz₂ =>
+      termFastEq fuel c₁ c₂ && termFastEq fuel z₁ z₂ && termFastEq fuel nz₁ nz₂
+    | _, _ => false
+
 mutual
 
 /-- Compare two semantic values (untyped / universe-level structural equality with glued fast-path). -/
@@ -55,6 +107,10 @@ def equalVal (fuel : Nat) (G : GlobalEnv) (depth : Nat) (v₁ v₂ : Val) : Bool
       strEq n₁ n₂ && equalValLists fuel' G depth ps₁ ps₂
     | .ctor d₁ c₁ as₁, .ctor d₂ c₂ as₂ =>
       strEq d₁ d₂ && strEq c₁ c₂ && equalValLists fuel' G depth as₁ as₂
+    | .pctor d₁ p₁ as₁, .pctor d₂ p₂ as₂ =>
+      strEq d₁ d₂ && strEq p₁ p₂ && equalValLists fuel' G depth as₁ as₂
+    | .invPctor g₁ d₁ p₁ as₁, .invPctor g₂ d₂ p₂ as₂ =>
+      (g₁ == g₂) && strEq d₁ d₂ && strEq p₁ p₂ && equalValLists fuel' G depth as₁ as₂
     | .obsEq g₁ ty₁ es₁, .obsEq g₂ ty₂ es₂ =>
       (g₁ == g₂) && equalVal fuel' G depth ty₁ ty₂ && equalValLists fuel' G depth es₁ es₂
     | .obsHet g₁ tb₁ es₁, .obsHet g₂ tb₂ es₂ =>
@@ -188,6 +244,27 @@ def equalValLists (fuel : Nat) (G : GlobalEnv) (depth : Nat) (xs ys : List Val) 
     | fuel' + 1 => equalVal fuel' G depth x y && equalValLists fuel' G depth xr yr
   | _, _ => false
 
+def equalBranches (fuel : Nat) (G : GlobalEnv) (depth : Nat)
+    (env₁ env₂ : List Val)
+    (bs₁ bs₂ : List (String × Nat × Term)) : Bool :=
+  match bs₁, bs₂ with
+  | [], [] => true
+  | (c₁, ar₁, t₁) :: r₁, (c₂, ar₂, t₂) :: r₂ =>
+    match fuel with
+    | 0 => false
+    | fuel' + 1 =>
+      let sameHead := strEq c₁ c₂ && (ar₁ == ar₂)
+      let bodyOk :=
+        if termFastEq fuel' t₁ t₂ && equalValLists fuel' G depth env₁ env₂ then
+          true
+        else
+          let fvs := freshBranchVars depth ar₁
+          equalVal fuel' G (depth + ar₁)
+            (evalTerm fuel' G (fvs ++ env₁) t₁)
+            (evalTerm fuel' G (fvs ++ env₂) t₂)
+      sameHead && bodyOk && equalBranches fuel' G depth env₁ env₂ r₁ r₂
+  | _, _ => false
+
 def equalSpines (fuel : Nat) (G : GlobalEnv) (depth : Nat) (s₁ s₂ : List Elim) : Bool :=
   match s₁, s₂ with
   | [], [] => true
@@ -210,6 +287,12 @@ def equalElim (fuel : Nat) (G : GlobalEnv) (depth : Nat) (e₁ e₂ : Elim) : Bo
     | .ungel g₁, .ungel g₂ => g₁ == g₂
     | .trr g₁ l₁, .trr g₂ l₂ => (g₁ == g₂) && equalVal fuel' G depth l₁ l₂
     | .trl g₁ l₁, .trl g₂ l₂ => (g₁ == g₂) && equalVal fuel' G depth l₁ l₂
+    | .matchData w₁ m₁ b₁ e₁, .matchData w₂ m₂ b₂ e₂ =>
+      decide (w₁ = w₂) && equalVal fuel' G depth m₁ m₂ && equalBranches fuel' G depth e₁ e₂ b₁ b₂
+    | .elimHIT d₁ m₁ pt₁ pa₁ e₁, .elimHIT d₂ m₂ pt₂ pa₂ e₂ =>
+      strEq d₁ d₂ && equalVal fuel' G depth m₁ m₂ &&
+      equalBranches fuel' G depth e₁ e₂ pt₁ pt₂ &&
+      equalBranches fuel' G depth e₁ e₂ pa₁ pa₂
     | .pathJ g₁ t₁ b₁ m₁ rc₁ tg₁, .pathJ g₂ t₂ b₂ m₂ rc₂ tg₂ =>
       (g₁ == g₂) &&
       equalVal fuel' G depth t₁ t₂ &&

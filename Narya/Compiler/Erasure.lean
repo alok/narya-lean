@@ -278,7 +278,9 @@ theorem evalTerm_erasure_sound (T : ModeTheory) (p₀ p₁ : UInt64) :
   | .proj _ _, _, _, _, _, hErase, _, _
   | .dataTy _ _, _, _, _, _, hErase, _, _
   | .ctor _ _ _, _, _, _, _, hErase, _, _
+  | .pctor _ _ _, _, _, _, _, hErase, _, _
   | .matchData _ _ _ _, _, _, _, _, hErase, _, _
+  | .elimHIT _ _ _ _ _, _, _, _, _, hErase, _, _
   | .obsEq _ _ _, _, _, _, _, hErase, _, _
   | .obsHet _ _ _, _, _, _, _, hErase, _, _
   | .refl _ _, _, _, _, _, hErase, _, _

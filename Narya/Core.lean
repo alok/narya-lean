@@ -11,3 +11,8 @@ import Narya.Core.Safety
 import Narya.Core.Unify
 import Narya.Core.Level
 import Narya.Core.Linear
+import Narya.Core.HIT
+import Narya.Core.Directed
+import Narya.Core.Squares
+import Narya.Core.RelTransfer
+import Narya.Core.Canonicity
