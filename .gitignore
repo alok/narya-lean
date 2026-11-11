@@ -1,8 +1,12 @@
 /.lake
+/.narya
+/.jj
 /build
 *.olean
 *.ilean
 *.c
+!cbits/
+!cbits/*.c
 *.o
 *.s.out
 *.bin
