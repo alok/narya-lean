@@ -118,8 +118,10 @@ def mentionsMeta (m : MetaId) : Term → Bool
   | .letBox _ _ s mot b => mentionsMeta m s || mentionsMeta m mot || mentionsMeta m b
   | .recordTy fs => mentionsMetaFields m fs
   | .tuple fs => mentionsMetaTuple m fs
-  | .dataTy _ ps | .ctor _ _ ps => mentionsMetaList m ps
+  | .dataTy _ ps | .ctor _ _ ps | .pctor _ _ ps => mentionsMetaList m ps
   | .matchData s _ mot bs => mentionsMeta m s || mentionsMeta m mot || mentionsMetaBranches m bs
+  | .elimHIT _ mot pts pas s =>
+    mentionsMeta m mot || mentionsMetaBranches m pts || mentionsMetaBranches m pas || mentionsMeta m s
   | .obsEq _ ty es => mentionsMeta m ty || mentionsMetaList m es
   | .obsHet _ tb es => mentionsMeta m tb || mentionsMetaList m es
   | .refl _ s | .sym _ s | .ungel _ s | .boxLine _ _ s => mentionsMeta m s
@@ -478,6 +480,14 @@ def unifyVal (fuel : Nat) (G : GlobalEnv) (policy : FallbackPolicy)
       else .notEqual
     | .ctor d₁ c₁ as₁, .ctor d₂ c₂ as₂ =>
       if strEq d₁ d₂ && strEq c₁ c₂ then
+        unifyList fuel' G policy allowSpec speculative mc depth as₁ as₂
+      else .notEqual
+    | .pctor d₁ p₁ as₁, .pctor d₂ p₂ as₂ =>
+      if strEq d₁ d₂ && strEq p₁ p₂ then
+        unifyList fuel' G policy allowSpec speculative mc depth as₁ as₂
+      else .notEqual
+    | .invPctor g₁ d₁ p₁ as₁, .invPctor g₂ d₂ p₂ as₂ =>
+      if g₁ == g₂ && strEq d₁ d₂ && strEq p₁ p₂ then
         unifyList fuel' G policy allowSpec speculative mc depth as₁ as₂
       else .notEqual
     | .obsEq g₁ ty₁ es₁, .obsEq g₂ ty₂ es₂ =>

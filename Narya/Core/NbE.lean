@@ -137,6 +137,8 @@ def replaySpine (fuel : Nat) (G : GlobalEnv) (v : Val) : List Elim → Val
         | .trl g tyLine => evalTrl fuel' G g tyLine v
         | .matchData winMod motive branches env =>
           evalMatch fuel' G v winMod motive branches env
+        | .elimHIT dName motive ptBranches pathBranches env =>
+          evalElimHIT fuel' G dName motive ptBranches pathBranches env v
         | .pathJ g ty base motive reflCase target =>
           evalPathJ fuel' G g ty base motive reflCase target v
         | .hap g a₀ a₁ pa =>
@@ -187,6 +189,11 @@ def evalSym (fuel : Nat) (G : GlobalEnv) (g : Dir) (p : Val) : Val :=
       if g == g' then
         evalTrans fuel' G g (evalSym fuel' G g p₂) (evalSym fuel' G g p₁)
       else .neu (.ax "<sym-dir>") [.sym g]
+    | .pctor dName pName args =>
+      .invPctor g dName pName args
+    | .invPctor g' dName pName args =>
+      if g == g' then .pctor dName pName args
+      else .neu (.ax "<sym-dir>") [.sym g]
     | .gel g' [a₀, a₁] rel =>
       if g == g' then
         match rel.force with
@@ -231,7 +238,8 @@ def evalTrans (fuel : Nat) (G : GlobalEnv) (g : Dir) (p : Val) (q : Val) : Val :
       else .trans g p q
     | _, _ => .trans g p q
 
-/-- Compute congruence `ap g fn argBridge`. -/
+/-- Compute congruence `ap g fn argBridge` (including functoriality on `trans`, inverse HIT
+    path constructors `invPctor`, and computational β-reduction of `elimHIT` on `pctor`!). -/
 def evalAp (fuel : Nat) (G : GlobalEnv) (g : Dir) (fn : Val) (argBridge : Val) : Val :=
   match fuel with
   | 0 => .neu (.ax "<ap-fuel>") [.ap g fn]
@@ -241,12 +249,35 @@ def evalAp (fuel : Nat) (G : GlobalEnv) (g : Dir) (fn : Val) (argBridge : Val) :
       if g == g' then
         .refl g (applyVal fuel' G fn (ModPath.id G.theory.defaultMode) tm)
       else .neu (.ax "<ap-dir>") [.ap g fn]
+    | .trans g' p q =>
+      if g == g' then
+        evalTrans fuel' G g (evalAp fuel' G g fn p) (evalAp fuel' G g fn q)
+      else .neu (.ax "<ap-dir>") [.ap g fn]
+    | .pctor dName pName args =>
+      match fn.force with
+      | .lam _ _ (.mk fnEnv (.elimHIT dName' _ _ pathBranches (.bvar 0))) =>
+        if strEq dName dName' then
+          match pathBranches.find? (fun (pn, _, _) => strEq pn pName) with
+          | some (_, _, pBody) => evalTerm fuel' G (args.reverse ++ fnEnv) pBody
+          | none => .neu (.ax s!"<missing-hit-path:{pName}>") [.ap g fn]
+        else .neu (.ax "<ap-hit-mismatch>") [.ap g fn]
+      | .lam _ _ (.mk _ (.bvar 0)) =>
+        .pctor dName pName args
+      | .lam _ _ (.mk _ (.modalBox bMod (.bvar 0))) =>
+        if bMod.keepsDir g then .boxLine g bMod (.pctor dName pName args)
+        else .neu (.ax "<stuck-ap>") [.ap g fn]
+      | _ => .neu (.ax "<stuck-ap-pctor>") [.ap g fn]
+    | .invPctor g' dName pName args =>
+      if g == g' then
+        evalSym fuel' G g (evalAp fuel' G g fn (.pctor dName pName args))
+      else .neu (.ax "<ap-dir>") [.ap g fn]
     | .glued name rspine forced =>
       .glued name (.ap g fn :: rspine) (evalAp fuel' G g fn forced)
     | .neu hd rspine => .neu hd (.ap g fn :: rspine)
     | _ =>
-      -- Push `ap` of a modal box type constructor `λ X => ⟨μ | X⟩` directly into `boxLine`!
+      -- Push `ap` of identity or modal box type constructor `λ X => ⟨μ | X⟩` directly!
       match fn.force with
+      | .lam _ _ (.mk _ (.bvar 0)) => argBridge
       | .lam _ _ (.mk _ (.modalBox bMod (.bvar 0))) =>
         if bMod.keepsDir g then .boxLine g bMod argBridge
         else .neu (.ax "<stuck-ap>") [.ap g fn]
@@ -491,6 +522,26 @@ def evalMatch (fuel : Nat) (G : GlobalEnv) (scrut : Val) (winMod : ModPath)
       .neu hd (.matchData winMod motive branches env :: rspine)
     | _ => .neu (.ax "<stuck-match>") [.matchData winMod motive branches env]
 
+/-- Compute Higher Inductive Type point-elimination (`evalElimHIT`). -/
+def evalElimHIT (fuel : Nat) (G : GlobalEnv) (dName : String) (motive : Val)
+    (ptBranches pathBranches : List (String × Nat × Term)) (env : List Val) (scrut : Val) : Val :=
+  match fuel with
+  | 0 => .neu (.ax "<elimHIT-fuel>") [.elimHIT dName motive ptBranches pathBranches env]
+  | fuel' + 1 =>
+    match scrut with
+    | .ctor dName' ctorName args =>
+      if strEq dName dName' then
+        match ptBranches.find? (fun (cn, _, _) => strEq cn ctorName) with
+        | some (_, _, body) => evalTerm fuel' G (args.reverse ++ env) body
+        | none => .neu (.ax s!"<missing-hit-pt:{ctorName}>") []
+      else .neu (.ax "<elimHIT-data-mismatch>") []
+    | .glued name rspine forced =>
+      .glued name (.elimHIT dName motive ptBranches pathBranches env :: rspine)
+        (evalElimHIT fuel' G dName motive ptBranches pathBranches env forced)
+    | .neu hd rspine =>
+      .neu hd (.elimHIT dName motive ptBranches pathBranches env :: rspine)
+    | _ => .neu (.ax "<stuck-elimHIT>") [.elimHIT dName motive ptBranches pathBranches env]
+
 /-- Compute HoTT path induction `J` (`pathJ g ty base motive reflCase base (refl g base) ↝ reflCase`). -/
 def evalPathJ (fuel : Nat) (G : GlobalEnv) (g : Dir) (ty base motive reflCase target path : Val) : Val :=
   match fuel with
@@ -612,8 +663,13 @@ def evalTerm (fuel : Nat) (G : GlobalEnv) (env : List Val) (tm : Term) : Val :=
       .dataTy name (evalTerms fuel' G env params)
     | .ctor dName cName args =>
       .ctor dName cName (evalTerms fuel' G env args)
+    | .pctor dName pName args =>
+      .pctor dName pName (evalTerms fuel' G env args)
     | .matchData scrut winMod motive branches =>
       evalMatch fuel' G (evalTerm fuel' G env scrut) winMod (evalTerm fuel' G env motive) branches env
+    | .elimHIT dName motive ptBranches pathBranches scrut =>
+      evalElimHIT fuel' G dName (evalTerm fuel' G env motive) ptBranches pathBranches env
+        (evalTerm fuel' G env scrut)
     | .obsEq g ty ends =>
       evalObsEq fuel' G g (evalTerm fuel' G env ty) (evalTerms fuel' G env ends)
     | .obsHet g tyB ends =>
@@ -737,6 +793,10 @@ def quoteSpine (fuel : Nat) (G : GlobalEnv) (depth : Nat) (base : Term) : List E
       | .matchData winMod motive branches env =>
         let qBranches := quoteBranches fuel' G depth env branches
         .matchData prev winMod (quoteVal fuel' G depth motive) qBranches
+      | .elimHIT dName motive ptBranches pathBranches env =>
+        let qPt := quoteBranches fuel' G depth env ptBranches
+        let qPath := quoteBranches fuel' G depth env pathBranches
+        .elimHIT dName (quoteVal fuel' G depth motive) qPt qPath prev
       | .pathJ g ty baseV motive reflC target =>
         .pathJ g (quoteVal fuel' G depth ty) (quoteVal fuel' G depth baseV)
           (quoteVal fuel' G depth motive) (quoteVal fuel' G depth reflC)
@@ -824,6 +884,9 @@ def quoteVal (fuel : Nat) (G : GlobalEnv) (depth : Nat) (v : Val) : Term :=
     | .tuple fields => .tuple (quoteTupleVals fuel' G depth fields)
     | .dataTy name params => .dataTy name (quoteVals fuel' G depth params)
     | .ctor dName cName args => .ctor dName cName (quoteVals fuel' G depth args)
+    | .pctor dName pName args => .pctor dName pName (quoteVals fuel' G depth args)
+    | .invPctor g dName pName args =>
+      .sym g (.pctor dName pName (quoteVals fuel' G depth args))
     | .obsEq g ty ends =>
       .obsEq g (quoteVal fuel' G depth ty) (quoteVals fuel' G depth ends)
     | .obsHet g tyB ends =>

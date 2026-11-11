@@ -13,7 +13,9 @@ open Narya.Dim Narya.Modal Narya.Core
 
 /-- Render a `Dir` prefix nicely (`Id` for HoTT, `Br` for binary param, `Disp` for dTT, `Fresh` for nominal). -/
 def prettyObsHead : Dir → String
-  | { name := "e", arity := 2, fibrant := true, .. } => "Id"
+  | { name := "e", arity := 2, fibrant := true, symmetric := true, .. } => "Id"
+  | { name := "hom", arity := 2, fibrant := true, symmetric := false, .. } => "Hom"
+  | { name := "hom_op", arity := 2, bwdFibrant := true, symmetric := false, .. } => "HomOp"
   | { name := "p", arity := 2, fibrant := false, .. } => "Br"
   | { name := "d", arity := 1, .. } => "Disp"
   | { name := "w", arity := 0, .. } => "Fresh"
@@ -97,9 +99,16 @@ def prettyTerm (names : List String) : Term → String
   | .ctor _ cName [] => cName
   | .ctor _ cName args =>
     s!"({cName} {String.intercalate " " (prettyList names args)})"
+  | .pctor _ pName [] => pName
+  | .pctor _ pName args =>
+    s!"({pName} {String.intercalate " " (prettyList names args)})"
   | .matchData scrut winMod _ branches =>
     let bStrs := prettyBranches names branches
     s!"(match@{winMod.pretty} {prettyTerm names scrut} with {String.intercalate " " bStrs})"
+  | .elimHIT dName _ ptBranches pathBranches scrut =>
+    let ptStrs := prettyBranches names ptBranches
+    let paStrs := prettyBranches names pathBranches
+    s!"(elimHIT {dName} {prettyTerm names scrut} pts [{String.intercalate " " ptStrs}] paths [{String.intercalate " " paStrs}])"
   | .obsEq g ty ends =>
     let args := prettyTerm names ty :: prettyList names ends
     s!"({prettyObsHead g} {String.intercalate " " args})"

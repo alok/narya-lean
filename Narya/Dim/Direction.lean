@@ -16,20 +16,27 @@ namespace Narya.Dim
 
 /-- A colored dimension direction in multi-directional Higher Observational Type Theory. -/
 structure Dir where
-  /-- Short identifier for superscripts and diagnostics (e.g. `"e"`, `"p"`, `"d"`, `"w"`). -/
+  /-- Short identifier for superscripts and diagnostics (e.g. `"e"`, `"p"`, `"d"`, `"w"`, `"hom"`). -/
   name : String
   /-- Number of endpoints of a 1-dimensional cube in this direction. -/
   arity : Nat
-  /-- True if types carry computational HoTT fibrancy (`trr`, `trl`, `liftr`, `liftl`) along this direction. -/
+  /-- True if types carry covariant/forward computational fibrancy (`trr`, `liftr`) along this direction. -/
   fibrant : Bool := false
   /-- True if parametricity/degeneracies are available internally in arbitrary contexts;
       false if guarded by a parametric locker modality (`-external` / `-dtt`). -/
   internal : Bool := true
+  /-- True if types carry contravariant/backward computational fibrancy (`trl`, `liftl`) along this direction.
+      Defaults to `fibrant` (2-sided groupoid fibrancy for `Dir.hott`), while `Dir.directed` sets
+      `fibrant := true, bwdFibrant := false` for directed $\infty$-categories! -/
+  bwdFibrant : Bool := fibrant
+  /-- True if binary bridges/paths in this direction admit symmetry (`sym_g`).
+      Defaults to `arity == 2`, while directed morphism directions set `symmetric := false`. -/
+  symmetric : Bool := (arity == 2)
   deriving DecidableEq, Repr, Hashable, Inhabited
 
 namespace Dir
 
-/-- Standard HoTT path direction (`e`, binary endpoints `0, 1`, fibrant, internal). -/
+/-- Standard HoTT path direction (`e`, binary endpoints `0, 1`, 2-sided fibrant groupoid, internal). -/
 def hott : Dir :=
   { name := "e", arity := 2, fibrant := true, internal := true }
 
@@ -44,6 +51,17 @@ def displayed : Dir :=
 /-- Nullary nominal / weakening direction (`w`, `arity = 0`, Schanuel presheaf model with fresh binder `И`). -/
 def nominal : Dir :=
   { name := "w", arity := 0, fibrant := false, internal := true }
+
+/-- Covariant directed morphism direction (`hom`, binary `0 → 1`, forward-fibrant `trr`/`liftr`/`trans`,
+    NO symmetry `sym`, NO backward transport `trl`, NO undirected `J`) for Riehl–Shulman / Weaver–Licata
+    Directed Higher Observational Type Theory! -/
+def directed : Dir :=
+  { name := "hom", arity := 2, fibrant := true, internal := true, bwdFibrant := false, symmetric := false }
+
+/-- Contravariant opposite directed morphism direction (`hom_op`, backward-fibrant `trl`/`liftl`/`trans`,
+    NO symmetry `sym`, NO forward transport `trr`). -/
+def opDirected : Dir :=
+  { name := "hom_op", arity := 2, fibrant := false, internal := true, bwdFibrant := true, symmetric := false }
 
 instance : ToString Dir where
   toString d := d.name

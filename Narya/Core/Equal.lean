@@ -55,6 +55,10 @@ def equalVal (fuel : Nat) (G : GlobalEnv) (depth : Nat) (v₁ v₂ : Val) : Bool
       strEq n₁ n₂ && equalValLists fuel' G depth ps₁ ps₂
     | .ctor d₁ c₁ as₁, .ctor d₂ c₂ as₂ =>
       strEq d₁ d₂ && strEq c₁ c₂ && equalValLists fuel' G depth as₁ as₂
+    | .pctor d₁ p₁ as₁, .pctor d₂ p₂ as₂ =>
+      strEq d₁ d₂ && strEq p₁ p₂ && equalValLists fuel' G depth as₁ as₂
+    | .invPctor g₁ d₁ p₁ as₁, .invPctor g₂ d₂ p₂ as₂ =>
+      (g₁ == g₂) && strEq d₁ d₂ && strEq p₁ p₂ && equalValLists fuel' G depth as₁ as₂
     | .obsEq g₁ ty₁ es₁, .obsEq g₂ ty₂ es₂ =>
       (g₁ == g₂) && equalVal fuel' G depth ty₁ ty₂ && equalValLists fuel' G depth es₁ es₂
     | .obsHet g₁ tb₁ es₁, .obsHet g₂ tb₂ es₂ =>
@@ -210,6 +214,9 @@ def equalElim (fuel : Nat) (G : GlobalEnv) (depth : Nat) (e₁ e₂ : Elim) : Bo
     | .ungel g₁, .ungel g₂ => g₁ == g₂
     | .trr g₁ l₁, .trr g₂ l₂ => (g₁ == g₂) && equalVal fuel' G depth l₁ l₂
     | .trl g₁ l₁, .trl g₂ l₂ => (g₁ == g₂) && equalVal fuel' G depth l₁ l₂
+    | .elimHIT d₁ m₁ pt₁ pa₁ e₁, .elimHIT d₂ m₂ pt₂ pa₂ e₂ =>
+      strEq d₁ d₂ && equalVal fuel' G depth m₁ m₂ && (pt₁ == pt₂) && (pa₁ == pa₂) &&
+      equalValLists fuel' G depth e₁ e₂
     | .pathJ g₁ t₁ b₁ m₁ rc₁ tg₁, .pathJ g₂ t₂ b₂ m₂ rc₂ tg₂ =>
       (g₁ == g₂) &&
       equalVal fuel' G depth t₁ t₂ &&

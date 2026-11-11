@@ -90,8 +90,8 @@ def runPackedAndTimeMTests (st : IO.Ref TestState) : IO Unit := do
 
 def runModalTests (st : IO.Ref TestState) : IO Unit := do
   IO.println "── Suite 3: 2-Categorical Mode Combinators & Key Synthesis (`Narya.Modal`) ──"
-  assertCond st "All 21 standard mode theories in catalog are well-formed (wf = true)"
-    (standardCatalog.all ModeTheory.wf && standardCatalog.length == 21)
+  assertCond st "All 22 standard mode theories in catalog are well-formed (wf = true)"
+    (standardCatalog.all ModeTheory.wf && standardCatalog.length == 22)
 
   let adj := adjunctionTheory
   let dual2 := opposite2Cat "adjunction" (opposite2Cat "dual1" adj)

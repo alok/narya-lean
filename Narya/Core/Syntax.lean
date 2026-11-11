@@ -128,9 +128,19 @@ inductive Term where
   | dataTy (name : String) (params : List Term)
   /-- Inductive constructor `Ctor dataName ctorName args`. -/
   | ctor (dataName : String) (ctorName : String) (args : List Term)
+  /-- Higher Inductive Type 1-cell path constructor `pctor dataName pctorName args`. -/
+  | pctor (dataName : String) (pctorName : String) (args : List Term)
   /-- Windowed inductive pattern matching (`winMod` filters discrete higher dimensions!).
       Branches are `(ctorName, arity, body)`. -/
   | matchData (scrut : Term) (winMod : ModPath) (motive : Term) (branches : List (String × Nat × Term))
+  /-- Higher Inductive Type eliminator `elimHIT dataName motive ptBranches pathBranches scrut`:
+      - Evaluates `ptBranch_c[args]` on point constructors `.ctor dataName c args`.
+      - Under `ap g (λ x => elimHIT dataName motive ptBranches pathBranches x) (.pctor dataName p args)`,
+        computes directly to `pathBranch_p[args]` without requiring a cubical interval! -/
+  | elimHIT (dataName : String) (motive : Term)
+      (ptBranches : List (String × Nat × Term))
+      (pathBranches : List (String × Nat × Term))
+      (scrut : Term)
   /-- Homogeneous observational bridge/path type `ObsEq g ty [a₀, ..., a_{k-1}]`. -/
   | obsEq (g : Dir) (ty : Term) (ends : List Term)
   /-- Heterogeneous observational bridge/path type `ObsHet g tyBridge [a₀, ..., a_{k-1}]`. -/
@@ -207,13 +217,24 @@ structure CtorSpec where
   argTys : List Term
   deriving BEq, Repr, Inhabited
 
-/-- Inductive datatype declaration in the global signature. -/
+/-- 1-cell path constructor specification in a Higher Inductive Type (`HIT`).
+    Declares `name (args : argTys) : ObsEq dir (Data dName params) [lhs, rhs]`. -/
+structure PathCtorSpec where
+  name : String
+  dir : Dir := .hott
+  argTys : List Term := []
+  lhs : Term
+  rhs : Term
+  deriving BEq, Repr, Inhabited
+
+/-- Inductive / Higher Inductive datatype declaration in the global signature. -/
 structure DataSpec where
   name : String
   mode : ModeId
   paramTys : List Term
   univLvl : Nat := 0
   ctors : List CtorSpec
+  pathCtors : List PathCtorSpec := []
   deriving BEq, Repr, Inhabited
 
 /-- Entry in the global environment `GlobalEntry`. -/
