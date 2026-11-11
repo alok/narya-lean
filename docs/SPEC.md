@@ -77,6 +77,6 @@ Plain intensional dependent type theory (such as MLTT) makes a programming langu
 
 ## 3. Done Criteria
 1. `lake build` succeeds with **0 errors, 0 warnings, and 0 `sorry`s** across the entire codebase.
-2. `lake test` passes 100% of unit, property, typechecking, open-problem theorem, and live `clang` ARM64 native binary execution tests.
-3. `lake exe narya` runs standalone checks, evaluations, mode theory inspections, and native ARM64 compilation.
+2. `lake test` passes 100% of all 10 verification suites (`75/75` assertions across cubical operators, 22 mode theories, HOTT kernel, 5 HOTT theory frontiers, extensible `.narya` syntax, Unison `#hash` digests, Sorbet arena, linear Interaction Nets, and native ARM64 `ThinEmitter` `MAP_JIT` execution).
+3. `lake exe narya` runs standalone `.narya` and `.ny` scripts, incremental Merkle package builds (`stdlib` & `stdlib_modern`), `.ny → .narya` translation, Unison digest inspection (`narya hash`), profiling, mode theory inspections (`22` catalog theories), and native ARM64 compilation.
 4. Public GitHub repository `alok/narya-lean` pushed with atomic commit history, GitHub Actions CI, `README.md`, and `docs/ARCHITECTURE_AND_GUIDE.md`.

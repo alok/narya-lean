@@ -1,0 +1,18 @@
+-- stdlib_modern/linear.narya — Benton LNL Quantitative/Linear Pipeline (`0 / 1 / ω` QTT grades!)
+
+theory linear_adjoint
+
+-- 1. Grade `1` (`1_Lin`): linear consumption, 0 DUP fans, 0 reduction allocations in `InteractionNet`!
+def linearStep (1 x : U64) : U64 :=
+  (x + 19u64) * 2u64
+
+-- 2. Grade `ω` (`! = F ∘ G` via `F.G : Lin -> Lin`): unrestricted promotion + BFS dereliction `ε_lnl`!
+def bangSquare (ω x : U64) : U64 :=
+  x * x
+
+-- 3. Grade `0` (`Ghost0`): statically erased ghost witness (`0` runtime uses) + linear `x` (`1` use)!
+def ghostErasedLinear (0 g : U64) (1 x : U64) : U64 :=
+  x + 10u64
+
+#eval linearStep 7u64
+#eval bangSquare @[F.G] 9u64

@@ -3,3 +3,4 @@
 -/
 import Narya.Syntax.Pretty
 import Narya.Syntax.Parser
+import Narya.Syntax.Modern

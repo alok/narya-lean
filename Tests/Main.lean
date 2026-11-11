@@ -709,6 +709,84 @@ def runFrontierTheoryTests (st : IO.Ref TestState) : IO Unit := do
   assertCond st "Frontier 5 (Canonicity): Closed higher-order Glue + arrowLine + prodLine + boxLine ~> 117u64!"
     (canonRes == some (.vu64 117))
 
+def runModernSyntaxAndUnisonHashTests (st : IO.Ref TestState) : IO Unit := do
+  IO.println "── Suite 10: Zero-Lisp Extensible `.narya` Syntax, `.ny → .narya` Translator & Unison `#hash` Digests ──"
+  -- 1. Dynamic Pratt + Mixfix showcase (`prefix`, `infixl`, `infixr`, leading `⟪x,y⟫`, trailing `a ≡[A] b`)
+  let showcaseSrc ← IO.FS.readFile "examples/modern_showcase.narya"
+  let showcaseOk := match runModernScript pureHoTT showcaseSrc with
+    | .ok (_, logs) =>
+      logs.any (fun l => (l.splitOn "[eval] 42u64 : U64").length > 1) &&
+      logs.any (fun l => (l.splitOn "[eval] 123u64 : U64").length > 1) &&
+      logs.any (fun l => (l.splitOn "[eval] (refl true)").length > 1)
+    | .error _ => false
+  assertCond st "Dynamic `.narya` Pratt/mixfix showcase (`≡[...]`, `~!`, `<+>`, `⟪x,y⟫`, `⊕`, `□[F.G]`) executes cleanly!"
+    showcaseOk
+
+  -- 2. QTT graded binders `(0 g : U64)`, `(1 x : U64)`, `(ω x : U64)` enforce linearity & ghost erasure!
+  let badLinMod := runModernScript pureHoTT
+    "theory linear_adjoint\ndef badDup (1 x : U64) : U64 := x + x\n"
+  let badGhostMod := runModernScript pureHoTT
+    "theory linear_adjoint\ndef badGhost (0 g : U64) : U64 := g\n"
+  let goodOmegaMod := runModernScript pureHoTT
+    "theory linear_adjoint\ndef okDup (ω x : U64) : U64 := x * x\n#eval okDup @[F.G] 11u64\n"
+  let qttModOk :=
+    !badLinMod.isOk && !badGhostMod.isOk &&
+    (match goodOmegaMod with
+     | .ok (_, ls) => ls.any (fun l => (l.splitOn "121u64").length > 1)
+     | .error _ => false)
+  assertCond st "QTT `.narya` graded binders reject `(1 x)` contraction, reject `(0 g)` read, & evaluate `(ω x)`!"
+    qttModOk
+
+  -- 3. Automatic `.ny -> .narya` translation roundtrips `examples/univalence_and_modal.ny` with identical digests!
+  let origNySrc ← IO.FS.readFile "examples/univalence_and_modal.ny"
+  let transRoundtripOk := match translateNyToModern origNySrc with
+    | .error _ => false
+    | .ok modSrc =>
+      match runScript pureHoTT origNySrc, runModernScript pureHoTT modSrc with
+      | .ok (gNy, _), .ok (gMod, _) =>
+        computeEnvDigests gNy == computeEnvDigests gMod && isModernSource modSrc
+      | _, _ => false
+  assertCond st "Translator `translateNyToModern` converts `.ny` -> `.narya` with 100% identical Unison `DefDigest`s!"
+    transRoundtripOk
+
+  -- 4. Full DAG build of `stdlib_modern` vs `stdlib`: 16/16 identical Unison `#impl`/`#spec`/`#abi` + identical ARM64 bytes!
+  let bLegacy ← buildPackage "stdlib" (forceRebuild := true)
+  let bModern ← buildPackage "stdlib_modern" (forceRebuild := true)
+  let pkgEqOk ← match bLegacy, bModern with
+    | .ok rLeg, .ok rMod => do
+      let legCollatz ← IO.FS.readBinFile "stdlib/.narya/build/collatz__collatz111.arm64.bin"
+      let modCollatz ← IO.FS.readBinFile "stdlib_modern/.narya/build/collatz__collatz111.arm64.bin"
+      let legSplit   ← IO.FS.readBinFile "stdlib/.narya/build/collatz__splitmix64.arm64.bin"
+      let modSplit   ← IO.FS.readBinFile "stdlib_modern/.narya/build/collatz__splitmix64.arm64.bin"
+      let mut jitOk := true
+      if ← jitSupported then
+        let v ← jitRunU64 modCollatz 27 0
+        jitOk := (v == 1)
+      pure (rLeg.defDigests.length == 16 &&
+            rLeg.defDigests == rMod.defDigests &&
+            legCollatz == modCollatz &&
+            legSplit == modSplit &&
+            jitOk)
+    | _, _ => pure false
+  assertCond st "`stdlib_modern` (.narya) & `stdlib` (.ny): 16/16 identical Unison digests & bit-exact ARM64 binaries!"
+    pkgEqOk
+
+  -- 5. Unison α-invariance + upstream global refactoring invariance!
+  let srcV1 :=
+    "def helper_old (x : U64) : U64 := x * 3u64 + 1u64\n" ++
+    "def downstream (a : U64) : U64 := helper_old a + 5u64\n"
+  let srcV2 :=
+    "def helper_renamed (elem : U64) : U64 := elem * 3u64 + 1u64\n" ++
+    "def downstream (inputVar : U64) : U64 := helper_renamed inputVar + 5u64\n"
+  let unisonRefactorOk := match runModernScript pureHoTT srcV1, runModernScript pureHoTT srcV2 with
+    | .ok (g1, _), .ok (g2, _) =>
+      let d1 := (computeEnvDigests g1).find? (fun (n, _) => n == "downstream")
+      let d2 := (computeEnvDigests g2).find? (fun (n, _) => n == "downstream")
+      d1.isSome && d1 == d2
+    | _, _ => false
+  assertCond st "Unison hashing: binder α-renaming + upstream global rename preserves downstream `#impl`/`#spec`!"
+    unisonRefactorOk
+
 def main : IO UInt32 := do
   IO.println "╔══════════════════════════════════════════════════════════════════════════╗"
   IO.println "║  Narya-Lean Verification & Native Apple Silicon Test Suite (`lake test`) ║"
@@ -723,6 +801,7 @@ def main : IO UInt32 := do
   runSorbetInetThinJitTests st
   runProfilerAndBuildTests st
   runFrontierTheoryTests st
+  runModernSyntaxAndUnisonHashTests st
   let final ← st.get
   IO.println "────────────────────────────────────────────────────────────────────────────"
   IO.println s!"Total: {final.passed + final.failed} assertions | Passed: {final.passed} | Failed: {final.failed}"

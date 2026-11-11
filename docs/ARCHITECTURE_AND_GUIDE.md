@@ -360,7 +360,76 @@ lake exe narya profile stdlib/collatz.ny \
   --folded /tmp/narya.folded                         # Nanosecond + heap-allocation profiler & Chrome/Flamegraph export
 lake exe narya jit                                   # Stream ARMv8-A machine words via ThinEmitter & run in W^X MAP_JIT
 lake exe narya bench                                 # Run all 5 performance & allocation benchmark suites
-lake exe narya catalog                               # Inspect all 21 built-in mode theories (incl. linear_adjoint)
-lake exe narya run examples/univalence_and_modal.ny  # Execute standalone .ny script
+lake exe narya catalog                               # Inspect all 22 built-in mode theories (incl. linear_adjoint & directed_cat)
+lake exe narya run examples/modern_showcase.narya    # Execute Zero-Lisp extensible .narya script
+lake exe narya hash stdlib_modern                    # Inspect Unison (#impl, #spec, #abi) content-addressed digests
+lake exe narya translate stdlib/collatz.ny           # Translate legacy Lisp .ny to clean .narya syntax
 lake exe narya asm                                   # Print verified AArch64 assembly & run on hardware
 ```
+
+---
+
+## 7. Deep Manual-Coding Guide: Five HOTT/Narya Theory Frontiers (`HIT`, `Directed`, `Squares`, `RelTransfer`, `Canonicity`)
+
+This section walks step-by-step through how to implement each of the five theoretical extensions by hand, the subtle kernel invariants involved, and why each design choice avoids noncomputability or interval bloat.
+
+### 7.1 Observational 1-HITs Without a Cubical Interval (`Narya/Core/HIT.lean`)
+- **Why standard cubical HITs hurt performance**: Cubical type checkers (`cubicaltt`, Cubical Agda) introduce explicit interval variables `i : II` into contexts and substitute De Morgan/Kan expressions during every conversion test. Narya's Higher Observational Type Theory instead computes equality *structurally by type*.
+- **How to build it manually**:
+  1. Add `PathCtorSpec` to `DataSpec` (`Syntax.lean`) storing `(name, dir, argTys, lhs, rhs)` and add `Term.pctor` + `Term.elimHIT`.
+  2. In `Val.lean`, represent canonical 1-cell constructors by `Val.pctor` and their formal groupoid inverses by `Val.invPctor` (so `sym .hott (pctor "S1" "loop" [])` normalizes to `invPctor` instead of getting stuck!).
+  3. In `NbE.lean`, evaluate `elimHIT` eagerly on point constructors (`.ctor "S1" "base" [] ↝ ptBranch`), while keeping neutral `elimHIT` glued; then in `evalAp` (`ap g (fun x => elimHIT ...) scrutBridge`), match `.pctor` to step directly to `pathBranch` and `.invPctor` to step to `symVal g pathBranch`!
+  4. To prove $\pi_1(S^1) \cong \mathbb{Z}$ (`pi1_S1_encode_decode_pos` and `pi1_S1_encode_decode_neg` for all $n \in \mathbb{N}$), define the Licata–Shulman universal cover `circleCode : S1 → Type` using `elimHIT` with `base ↦ Int` and `loop ↦ Glue Int Int succEquiv`. Because `ap circleCode loop` computes in one step to `Glue Int Int succEquiv`, `trr` along `loop^n` iterates `succInt` $n$ times by pure induction on `n`!
+
+### 7.2 Directed HoTT & Asymmetric `CovGlue` Univalence (`Narya/Core/Directed.lean`)
+- **Core insight**: Replace symmetric paths (`Dir.hott`) with polarized hom-arrows (`Dir.directed` and `Dir.opDirected` where `Dir.hasSymmetry .directed = false`).
+- **How to build it manually**:
+  1. Gate `sym` and `trl` in `Check.lean` behind `g.hasSymmetry = true` (`directed_rejects_sym`), while gating forward `trr` behind `g.isFibrant = true` (`Dir.directed` is forward-fibrant!).
+  2. Construct `covGlue A B f := Term.gel .directed [A, B] (graphRel f)`: unlike symmetric HoTT univalence (which requires a full isomorphism $A \simeq B$), a directed hom-bridge $A \to_{\mathrm{Type}} B$ requires **only a covariant function $f : A \to B$**! Forward transport `trr .directed (covGlue A B f) a` computes directly to `f a` (`covGlue_forward_beta_u64`), yielding computational Covariant Yoneda along simplices $\Delta^2$.
+
+### 7.3 2D Cubical Squares, Strict Kan Regularity & `--without-K` Eckmann–Hilton (`Narya/Core/Squares.lean`)
+- **Core insight**: A 2D square context `[.hott, .hott]` has $3 \times 3 = 9$ faces indexed by `SFace` (4 vertices, 4 edges, and 1 interior 2-cell `SFace.id`). Removing `SFace.id` yields an 8-face `TubeOf` boundary (`square_tube_plug_roundtrip`).
+- **Strict Kan regularity**: Defining `kanOpenBoxLid west north east := trans (sym west) (trans north east)` paired with two-sided `refl` identity reduction in `NbE.transVal` (`trans refl q ↝ q` AND `trans p refl ↝ p`, plus symmetric η-conversion in `Equal.lean`) makes `kanOpenBoxLid refl refl refl` reduce definitionally (`rfl`!) to `refl`.
+- **Eckmann–Hilton (`--without-K`)**: Never pattern-match on `p = refl` (which requires UIP / Axiom K); instead, whiskering two 2-loops $\alpha, \beta : \Omega^2(X, x_0)$ and contracting unitors via strict `J` / `Eq` induction proves horizontal and vertical composition commute (`eckmann_hilton_comm`).
+
+### 7.4 Internal `Gel` Representation Transfer (`Narya/Core/RelTransfer.lean`) & Canonicity (`Narya/Core/Canonicity.lean`)
+- **`NatU64Gel` (`RelTransfer.lean`)**: Defines `Gel .hott [Nat, U64] (fun n w => Id U64 (toU64 n) w)` inside Narya's kernel, proving that high-level unary Peano specifications refine across `ungel` and `ErasableCore` (`Core/Erasure.lean`) to identical 64-bit hardware execution on `Arm64.exec` and `ThinEmitter` `MAP_JIT` (`nat_add_transfers_to_arm64_u64`).
+- **Tait–Girard Canonicity (`Canonicity.lean`)**: Constructs an inductive hereditary logical relation `ValRel : CanonTy → CVal → Prop` by structural recursion on `CanonTy`, proving every closed term of `Bool` or `U64` under `Glue`, `sym`, `trans`, `arrowLine`, `prodLine`, and `boxLine` reduces to a canonical constructor/word (`closed_bool_canonicity`, `closed_u64_canonicity`).
+
+---
+
+## 8. Deep Manual-Coding Guide: Zero-Lisp Extensible `.narya` Syntax & Unison Content-Addressed `#hash` Digests
+
+### 8.1 Designing a Total Lean-Style Pratt + Mixfix Parser (`Narya/Syntax/Modern.lean`)
+To eliminate Lisp S-expressions while making syntax user-extensible *inside `.narya` files* and proving equivalence to `.ny` with `0 sorry` and `0 partial`:
+
+```mermaid
+flowchart LR
+    Src[".narya Source\n(graded binders, layout let,\ncustom notation/infix)"] -->|"tokenizeModern"| Tok["ModTok Stream\n(text, line, col)"]
+    Tok -->|"parseModernPrec\n+ SyntaxEnv"| MExpr["ModernExpr AST\n(wf : Bool)"]
+    Ny[".ny SExp"] <-->|"ofSExp_toSExp_roundtrip\n(0 sorry)"| MExpr
+    MExpr -->|"elabModernExpr =\nelaborateSExp (0 sorry)"| Term["Core Term\n(De Bruijn + ModPath)"]
+    Term -->|"termContentHash\n(erases binder names)"| Dig["Unison DefDigest\n(#spec, #impl, #abi)"]
+```
+
+1. **Why `mutual` Fuel Blocks Must Match `fuel` Outermost**:
+   In Lean 4, if one function in a `mutual` block matches on a list (`| [] => ...`) outermost while another matches on `fuel : Nat` outermost, Lean compiles the entire `mutual` block via `WellFounded.fix` instead of structural `Nat.rec`. Putting `match fuel with | 0 => ... | fuel' + 1 => ...` as the outermost match in every function in `Parser.lean` and `Modern.lean` guarantees pure `Nat.rec` reduction, letting step lemmas discharge in milliseconds via `with_unfolding_all rfl`!
+2. **Dynamic `SyntaxEnv` & Multi-Token Mixfix Lexing**:
+   - Even built-in 64-bit operators (`*` 70, `+`/`-` 65, `<<`/`>>` 60, `&` 55, `^` 52, `|` 50) live as ordinary `InfixRule` records inside `SyntaxEnv.standard`.
+   - When a user writes `notation 50 a " ≡[" A "] " b => Id A a b`, the quoted literal `" ≡["` is tokenized with the **same** `tokenizeModern` lexer (`lexNotationChunk`), yielding `["≡", "["]`. During Pratt climbing (`parsePrattClimb`), `matchTokSeq` matches arbitrary multi-token sequences regardless of user whitespace, resets the offside layout floor (`0`) inside delimited mixfix holes (`A` before `"]"`), and substitutes captured sub-ASTs via `substModernVars`.
+   - Because `Build.lean` threads `(sharedEnv : GlobalEnv, sharedSyn : SyntaxEnv)` across topological DAG order, notations declared in `univalence.narya` are automatically active in `collatz.narya` upon `import univalence`!
+3. **Column-Aware Offside Layout (`isOffside`)**:
+   Each `ModTok` carries `(line, col)`. Parsing `let x : T := val` passes `(letTok.line, letTok.col)` as the offside floor for `val`: as soon as the next token appears on a later line with `tok.col <= letTok.col`, `val` terminates cleanly without requiring `;` or `in`, while delimiters `( )`, `{ }`, `[ ]` reset the floor to `0`.
+
+### 8.2 Unison Content-Addressed Source, Proof & Hardware ABI Hashing (`Narya/Meta/ContentHash.lean`)
+Inspired by **Unison**'s content-addressed codebase architecture — extended to dependent HoTT proofs and native ARM64 compilation — `ContentHash.lean` computes a 3-tier `DefDigest` for every declaration:
+
+1. **Cosmetic Binder α-Invariance (`termContentHash_alpha_invariant`)**:
+   `termContentHash` hashes De Bruijn indices (`.bvar ix`), 2-cells, modalities, and directions while **discarding** cosmetic binder strings (`_name` in `.pi`, `.lam`, `.letIn`, `.letBox`, `.piLine`). Thus `def idTy (A : Type) (x : A) : A := x` in `.narya` and `(def idTy (pi A _ Type (arrow A A)) (fun A (fun x x)))` in `.ny` produce the **exact same 64-bit hash** (`#b14718bc35f2`)!
+2. **Global Refactoring Invariance (`global_rename_preserves_contentHash`)**:
+   `computeEnvDigests` traverses `GlobalEnv` in topological dependency order, binding each global name to its `#implHash` in `hEnv : HashEnv`. Downstream `.global g` references hash via `lookupGlobalHash hEnv g` (the target's `#implHash`), NOT the string `"g"`. An AI agent can rename upstream helpers freely without invalidating downstream theorem or binary caches.
+3. **Three-Tier `(#spec, #impl, #abi)` Separation (`same_erasure_same_abiHash`)**:
+   - `specHash` hashes `(energy, mode, ty)`: refactoring a proof term or optimizing an implementation body preserves `specHash` (`collatz111` and `splitmix64` both have `#spec = #8d9f72634c88`).
+   - `implHash` hashes `(specHash, body)`: captures full definitional behavior for NbE unfolding.
+   - `abiHash` hashes `thinCompileCore body` (raw ARMv8-A 32-bit machine words): any two proof-carrying definitions whose Ghost/HoTT witnesses erase to the same `HIR` program share the exact same hardware `abiHash`!
+

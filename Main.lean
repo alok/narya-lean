@@ -17,17 +17,19 @@ open Narya.Dim Narya.Modal Narya.Modal.Combinators Narya.Core Narya.Syntax Narya
 open Narya.Fast Narya.Compiler Narya.Compiler.ThinEmitter Narya.Meta Narya.Examples
 
 def printUsage : IO Unit := do
-  IO.println "Narya-Lean v0.2.0 — Multi-Modal Higher Observational Type Theory, ThinEmitter JIT & Merkle Builder"
+  IO.println "Narya-Lean v0.3.0 — Multi-Modal Higher Observational Type Theory, Extensible .narya Syntax, Unison Digests & ThinEmitter JIT"
   IO.println ""
   IO.println "Commands:"
-  IO.println "  lake exe narya catalog                                   List all 21 built-in 2-categorical mode theories"
-  IO.println "  lake exe narya build [pkgDir] [--rebuild]                Lake-style Merkle DAG package build (default: stdlib)"
-  IO.println "  lake exe narya profile <file.ny> [--json f] [--folded f] Phase + heap-allocation profiler & Chrome/Flamegraph export"
-  IO.println "  lake exe narya run <script.ny>                           Execute a standalone .ny proof/evaluation script"
-  IO.println "  lake exe narya eval [theory] <expr>                      Typecheck and normalize an expression"
-  IO.println "  lake exe narya jit                                       In-process ThinEmitter ARMv8-A binary codegen + MAP_JIT"
-  IO.println "  lake exe narya asm                                       Emit verified AArch64 .s assembly & run on hardware"
-  IO.println "  lake exe narya bench                                     Run all 5 performance & allocation benchmark suites"
+  IO.println "  lake exe narya catalog                                      List all 21 built-in 2-categorical mode theories"
+  IO.println "  lake exe narya build [pkgDir] [--rebuild]                   Lake-style Merkle DAG build (.narya & .ny, default: stdlib)"
+  IO.println "  lake exe narya hash [pkgDir|script]                         Compute Unison content-addressed (#impl, #spec, #abi) digests"
+  IO.println "  lake exe narya translate <file.ny> [--out <file.narya>]     Translate legacy Lisp .ny source into clean Zero-Lisp .narya"
+  IO.println "  lake exe narya profile <file.narya|.ny> [--json f] [--folded f] Phase + heap-allocation profiler & Flamegraph export"
+  IO.println "  lake exe narya run <script.narya|.ny>                       Execute a standalone .narya or .ny proof/evaluation script"
+  IO.println "  lake exe narya eval [theory] <expr>                         Typecheck and normalize a .narya or .ny expression"
+  IO.println "  lake exe narya jit                                          In-process ThinEmitter ARMv8-A binary codegen + MAP_JIT"
+  IO.println "  lake exe narya asm                                          Emit verified AArch64 .s assembly & run on hardware"
+  IO.println "  lake exe narya bench                                        Run all 5 performance & allocation benchmark suites"
 
 def cmdCatalog : IO UInt32 := do
   IO.println s!"Verified Narya Mode Theory Catalog ({standardCatalog.length} presentations, all wf = true):"
@@ -45,8 +47,31 @@ def cmdCatalog : IO UInt32 := do
   return 0
 
 def cmdRun (path : String) : IO UInt32 := do
-  let src ← IO.FS.readFile path
-  match runScript pureHoTT src with
+  let fpath : System.FilePath := path
+  let src ← IO.FS.readFile fpath
+  -- Auto-hydrate any `import`ed sibling modules when running a file inside a package directory!
+  let mut baseEnv := GlobalEnv.withStdPrelude pureHoTT
+  let mut baseSyn := SyntaxEnv.standard
+  let mut hasDeps := false
+  if let some parentDir := fpath.parent then
+    if let .ok deps := extractAnyImports src then
+      if !deps.isEmpty then
+        if let .ok dagUnits ← resolveModuleDAG parentDir deps then
+          hasDeps := true
+          for u in dagUnits do
+            match runAnyScriptWithEnv baseEnv baseSyn u.source with
+            | .ok (G', syn', _) =>
+              baseEnv := G'
+              baseSyn := syn'
+            | .error err =>
+              IO.eprintln s!"[import error in {u.path}] {err}"
+              return 1
+  let res :=
+    if hasDeps then
+      (runAnyScriptWithEnv baseEnv baseSyn src).map (fun (G, _, ls) => (G, ls))
+    else
+      runAnyScript pureHoTT src
+  match res with
   | .error err =>
     IO.eprintln s!"[error] {err}"
     return 1
@@ -58,7 +83,7 @@ def cmdRun (path : String) : IO UInt32 := do
 def cmdEval (theoryName : String) (exprSrc : String) : IO UInt32 := do
   let T := (standardCatalog.find? (fun t => t.name == theoryName)).getD pureHoTT
   let G := GlobalEnv.withStdPrelude T
-  match parseTerm G exprSrc with
+  match parseAnyTerm G SyntaxEnv.standard exprSrc with
   | .error err =>
     IO.eprintln s!"[parse error] {err}"
     return 1
@@ -73,6 +98,63 @@ def cmdEval (theoryName : String) (exprSrc : String) : IO UInt32 := do
       IO.println s!"type : {prettyVal G tyVal}"
       IO.println s!"norm : {prettyTerm [] nf}"
       return 0
+
+/-- Extract `--flag <value>` from CLI argument list. -/
+private def findFlagVal? (flag : String) : List String → Option String
+  | [] => none
+  | k :: v :: rest => if k == flag then some v else findFlagVal? flag (v :: rest)
+  | [_] => none
+
+/-- `lake exe narya translate <file.ny> [--out <file.narya>]` -/
+def cmdTranslate (args : List String) : IO UInt32 := do
+  match args with
+  | [] =>
+    IO.eprintln "Usage: lake exe narya translate <file.ny> [--out <file.narya>]"
+    return 1
+  | inPath :: rest =>
+    let nySrc ← IO.FS.readFile inPath
+    match translateNyToModern nySrc with
+    | .error err =>
+      IO.eprintln s!"[translate error] {err}"
+      return 1
+    | .ok modernSrc =>
+      match findFlagVal? "--out" rest with
+      | some outPath =>
+        IO.FS.writeFile outPath modernSrc
+        IO.println s!"[translated] {inPath} -> {outPath}"
+      | none =>
+        IO.print modernSrc
+      return 0
+
+/-- `lake exe narya hash [pkgDir|script]` — Compute Unison content-addressed (#impl, #spec, #abi) digests! -/
+def cmdHash (args : List String) : IO UInt32 := do
+  let target : System.FilePath := args.head?.getD "stdlib"
+  if ← (target / "narya.toml").pathExists then
+    match ← buildPackage target (forceRebuild := false) with
+    | .error err =>
+      IO.eprintln s!"[hash build error] {err}"
+      return 1
+    | .ok res =>
+      let digests ←
+        if !res.defDigests.isEmpty then pure res.defDigests
+        else
+          match ← buildPackage target (forceRebuild := true) with
+          | .ok r2 => pure r2.defDigests
+          | .error _ => pure []
+      IO.println (renderDigestsReport res.packageName digests)
+      return 0
+  else if ← target.pathExists then
+    let src ← IO.FS.readFile target
+    match runAnyScript pureHoTT src with
+    | .error err =>
+      IO.eprintln s!"[hash error] {err}"
+      return 1
+    | .ok (G, _) =>
+      IO.println (renderDigestsReport target.toString (computeEnvDigests G))
+      return 0
+  else
+    IO.eprintln s!"Target not found: {target}"
+    return 1
 
 /-- `lake exe narya build [pkgDir] [--rebuild]` — Lake-inspired Merkle DAG package builder! -/
 def cmdBuild (rawArgs : List String) : IO UInt32 := do
@@ -95,40 +177,39 @@ def cmdBuild (rawArgs : List String) : IO UInt32 := do
       IO.println s!"  Native ARM64 binaries ({res.emittedBins.length}):"
       for bp in res.emittedBins do
         IO.println s!"    • {bp}"
+    if !res.defDigests.isEmpty then
+      IO.println ""
+      IO.println (renderDigestsReport res.packageName res.defDigests)
     IO.println ""
     IO.println (res.profile.renderReport s!"Build Telemetry: {res.packageName}")
     return 0
 
-/-- Extract `--flag <value>` from CLI argument list. -/
-private def findFlagVal? (flag : String) : List String → Option String
-  | [] => none
-  | k :: v :: rest => if k == flag then some v else findFlagVal? flag (v :: rest)
-  | [_] => none
-
-/-- `lake exe narya profile <file.ny> [--json out.json] [--folded out.folded]` -/
+/-- `lake exe narya profile <file.narya|.ny> [--json out.json] [--folded out.folded]` -/
 def cmdProfile (args : List String) : IO UInt32 := do
   match args with
   | [] =>
-    IO.eprintln "Usage: lake exe narya profile <file.ny> [--json <trace.json>] [--folded <stacks.folded>]"
+    IO.eprintln "Usage: lake exe narya profile <file.narya|.ny> [--json <trace.json>] [--folded <stacks.folded>]"
     return 1
   | path :: rest =>
-    -- If `path` is inside a package with `narya.toml`, hydrate its upstream `(import ...)` modules first!
+    -- If `path` imports sibling modules, hydrate its upstream DAG (`GlobalEnv` + `SyntaxEnv`) first!
     let fpath : System.FilePath := path
     let src ← IO.FS.readFile fpath
     let mut baseEnv := GlobalEnv.withStdPrelude pureHoTT
+    let mut baseSyn := SyntaxEnv.standard
     if let some parentDir := fpath.parent then
-      if let .ok deps := extractImports src then
+      if let .ok deps := extractAnyImports src then
         if !deps.isEmpty then
           if let .ok dagUnits ← resolveModuleDAG parentDir deps then
             for u in dagUnits do
-              if let .ok (G', _) := runScriptWithEnv baseEnv u.source then
+              if let .ok (G', syn', _) := runAnyScriptWithEnv baseEnv baseSyn u.source then
                 baseEnv := G'
+                baseSyn := syn'
     let profRef ← ProfileState.newRef
-    match ← profileScriptWithEnv profRef baseEnv src path with
+    match ← profileAnyScriptWithEnv profRef baseEnv baseSyn src path with
     | .error err =>
       IO.eprintln s!"[profile error] {err}"
       return 1
-    | .ok (_, logs) =>
+    | .ok (_, _, logs) =>
       for l in logs do
         IO.println l
       IO.println ""
@@ -367,6 +448,8 @@ def main (args : List String) : IO UInt32 := do
   match args with
   | ["catalog"] => cmdCatalog
   | "build" :: rest => cmdBuild rest
+  | "hash" :: rest => cmdHash rest
+  | "translate" :: rest => cmdTranslate rest
   | "profile" :: rest => cmdProfile rest
   | ["run", path] => cmdRun path
   | ["eval", expr] => cmdEval "pure_hott" expr

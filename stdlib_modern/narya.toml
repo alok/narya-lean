@@ -1,0 +1,6 @@
+# stdlib_modern/narya.toml — Zero-Lisp Extensible Modern Syntax Narya Standard Library
+[package]
+name = "narya-stdlib-modern"
+version = "0.3.0"
+default_theory = "pure_hott"
+roots = ["collatz", "linear"]

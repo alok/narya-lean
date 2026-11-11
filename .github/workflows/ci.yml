@@ -30,13 +30,22 @@ jobs:
           build: true
           test: true
 
-      - name: Exercise Merkle Package Builder, Profiler, ThinEmitter JIT & Benchmarks
+      - name: Exercise Merkle Package Builder (.ny & .narya), Unison Digests, Translator, Profiler & JIT
         run: |
           lake exe narya build stdlib --rebuild
           lake exe narya build stdlib | tee /tmp/narya_cached_build.txt
           rg "0 built, 4 cached" /tmp/narya_cached_build.txt
+          lake exe narya build stdlib_modern --rebuild
+          lake exe narya build stdlib_modern | tee /tmp/narya_mod_cached.txt
+          rg "0 built, 4 cached" /tmp/narya_mod_cached.txt
+          lake exe narya hash stdlib_modern
+          lake exe narya run examples/modern_showcase.narya
+          lake exe narya translate examples/univalence_and_modal.ny --out /tmp/ci_translated.narya
+          lake exe narya run /tmp/ci_translated.narya
           lake exe narya profile stdlib/collatz.ny --json /tmp/narya_trace.json --folded /tmp/narya.folded
+          lake exe narya profile stdlib_modern/collatz.narya --json /tmp/narya_mod_trace.json
           test -s /tmp/narya_trace.json
+          test -s /tmp/narya_mod_trace.json
           test -s /tmp/narya.folded
           lake exe narya jit
           lake exe narya bench
