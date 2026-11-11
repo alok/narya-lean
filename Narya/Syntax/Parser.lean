@@ -117,39 +117,73 @@ def resolveBinOp64 : String → Option BinOp64
   | "u64_shr" => some .shr
   | _ => none
 
+/-- Built-in keyword atoms elaborated directly without variable lookup. -/
+def elabBuiltinAtom? : String → Option Term
+  | "Type" | "UU" => some (.uu 0)
+  | "Type1" => some (.uu 1)
+  | "Type_ext" | "UU_ext" => some (.uuExt 0)
+  | "U64" => some .u64Ty
+  | "zero" => some (.ctor "Nat" "zero" [])
+  | "true" => some (.ctor "Bool" "true" [])
+  | "false" => some (.ctor "Bool" "false" [])
+  | "tt" => some (.ctor "Unit" "tt" [])
+  | "Nat" => some (.dataTy "Nat" [])
+  | "Bool" => some (.dataTy "Bool" [])
+  | "Unit" => some (.dataTy "Unit" [])
+  | "Empty" => some (.dataTy "Empty" [])
+  | "?" => some (.mvar 0)
+  | _ => none
+
+/-- Reserved S-expression list-head keywords handled specially by `elaborateSExp`. -/
+def isReservedListHead (s : String) : Bool :=
+  decide (s = "u64") || decide (s = "?") || decide (s = "hole") ||
+  decide (s = "Type") || decide (s = "succ") || decide (s = "pi") ||
+  decide (s = "arrow") || decide (s = "lam") || decide (s = "fun") ||
+  decide (s = "let") || decide (s = "app_mod") || decide (s = "box") ||
+  decide (s = "box_intro") || decide (s = "record") || decide (s = "tuple") ||
+  decide (s = "proj") || decide (s = "funext") || decide (s = "hap") ||
+  decide (s = "u64_ifz") || decide (s = "u64_repeat") || decide (s = "Id") ||
+  decide (s = "Br") || decide (s = "Disp") || decide (s = "Fresh") ||
+  decide (s = "refl") || decide (s = "refl_dir") || decide (s = "Glue") ||
+  decide (s = "Gel") || decide (s = "trr") || decide (s = "trl") ||
+  decide (s = "liftr") || decide (s = "liftl") || decide (s = "sym") ||
+  decide (s = "trans") || decide (s = "arrow_line") || decide (s = "prod_line") ||
+  decide (s = "box_line") || decide (s = "u64_add") || decide (s = "u64_sub") ||
+  decide (s = "u64_mul") || decide (s = "u64_and") || decide (s = "u64_or") ||
+  decide (s = "u64_xor") || decide (s = "u64_shl") || decide (s = "u64_shr")
+
 mutual
-def elabRecordTele (fuel : Nat) (T : ModeTheory) (mode : ModeId) (locals : List String) :
-    List SExp → Except String (List FieldDecl)
-  | [] => .ok []
-  | .list [.atom fname, .atom modStr, ftyExp] :: rest =>
-    match fuel with
-    | 0 => .error "Elaborator out of fuel"
-    | fuel' + 1 => do
+def elabRecordTele (fuel : Nat) (T : ModeTheory) (mode : ModeId) (locals : List String)
+    (fields : List SExp) : Except String (List FieldDecl) :=
+  match fuel with
+  | 0 => .error "Elaborator out of fuel"
+  | fuel' + 1 =>
+    match fields with
+    | [] => .ok []
+    | .list [.atom fname, .atom modStr, ftyExp] :: rest => do
       let mp ← resolveModPath T mode modStr
       let fty ← elaborateSExp fuel' T mp.dom locals ftyExp
       let rest' ← elabRecordTele fuel' T mode (fname :: locals) rest
       .ok ((fname, mp, fty) :: rest')
-  | .list [.atom fname, ftyExp] :: rest =>
-    match fuel with
-    | 0 => .error "Elaborator out of fuel"
-    | fuel' + 1 => do
+    | .list [.atom fname, ftyExp] :: rest => do
       let mp := ModPath.id mode
       let fty ← elaborateSExp fuel' T mode locals ftyExp
       let rest' ← elabRecordTele fuel' T mode (fname :: locals) rest
       .ok ((fname, mp, fty) :: rest')
-  | other :: _ => .error s!"Invalid record field declaration: {reprStr other}"
+    | other :: _ => .error s!"Invalid record field declaration: {reprStr other}"
 
-def elabTupleFields (fuel : Nat) (T : ModeTheory) (mode : ModeId) (locals : List String) :
-    List SExp → Except String (List (String × Term))
-  | [] => .ok []
-  | .list [.atom fname, valExp] :: rest =>
-    match fuel with
-    | 0 => .error "Elaborator out of fuel"
-    | fuel' + 1 => do
+def elabTupleFields (fuel : Nat) (T : ModeTheory) (mode : ModeId) (locals : List String)
+    (fields : List SExp) : Except String (List (String × Term)) :=
+  match fuel with
+  | 0 => .error "Elaborator out of fuel"
+  | fuel' + 1 =>
+    match fields with
+    | [] => .ok []
+    | .list [.atom fname, valExp] :: rest => do
       let v ← elaborateSExp fuel' T mode locals valExp
       let rest' ← elabTupleFields fuel' T mode locals rest
       .ok ((fname, v) :: rest')
-  | other :: _ => .error s!"Invalid tuple field assignment: {reprStr other}"
+    | other :: _ => .error s!"Invalid tuple field assignment: {reprStr other}"
 
 /-- Desugar an `SExp` into a core `Term` under `T` and local binder stack `locals`. -/
 def elaborateSExp (fuel : Nat) (T : ModeTheory) (mode : ModeId) (locals : List String)
@@ -158,191 +192,194 @@ def elaborateSExp (fuel : Nat) (T : ModeTheory) (mode : ModeId) (locals : List S
   | 0 => .error "Elaborator out of fuel"
   | fuel' + 1 =>
     match sexp with
-    | .atom "Type" | .atom "UU" => .ok (.uu 0)
-    | .atom "Type1" => .ok (.uu 1)
-    | .atom "Type_ext" | .atom "UU_ext" => .ok (.uuExt 0)
-    | .atom "U64" => .ok .u64Ty
-    | .atom "zero" => .ok (.ctor "Nat" "zero" [])
-    | .atom "true" => .ok (.ctor "Bool" "true" [])
-    | .atom "false" => .ok (.ctor "Bool" "false" [])
-    | .atom "tt" => .ok (.ctor "Unit" "tt" [])
-    | .atom "Nat" => .ok (.dataTy "Nat" [])
-    | .atom "Bool" => .ok (.dataTy "Bool" [])
-    | .atom "Unit" => .ok (.dataTy "Unit" [])
-    | .atom "Empty" => .ok (.dataTy "Empty" [])
-    | .atom "?" => .ok (.mvar 0)
     | .atom ident =>
-      match findLocalIx? locals ident with
-      | some ix => .ok (.bvar ix)
-      | none => .ok (.global ident)
-    | .list [.atom "u64", .atom numStr] =>
-      match numStr.toNat? with
-      | some n => .ok (.u64Lit n.toUInt64)
-      | none => .error s!"Invalid U64 literal '{numStr}'"
-    | .list [.atom "?", .atom idStr] | .list [.atom "hole", .atom idStr] =>
-      match idStr.toNat? with
-      | some id => .ok (.mvar id)
-      | none => .error s!"Invalid hole id '{idStr}'"
-    | .list [.atom "Type", .atom lvlStr] =>
-      match lvlStr.toNat? with
-      | some l => .ok (.uu l)
-      | none => .error s!"Invalid universe level '{lvlStr}'"
-    | .list [.atom "succ", nExp] => do
-      let n ← elaborateSExp fuel' T mode locals nExp
-      .ok (.ctor "Nat" "succ" [n])
-    | .list [.atom "pi", .atom x, .atom modStr, domExp, codExp] => do
-      let mp ← resolveModPath T mode modStr
-      let dom ← elaborateSExp fuel' T mp.dom locals domExp
-      let cod ← elaborateSExp fuel' T mode (x :: locals) codExp
-      .ok (.pi x mp dom cod)
-    | .list [.atom "arrow", domExp, codExp] => do
-      let mp := ModPath.id mode
-      let dom ← elaborateSExp fuel' T mode locals domExp
-      let cod ← elaborateSExp fuel' T mode ("_" :: locals) codExp
-      .ok (.pi "_" mp dom cod)
-    | .list [.atom "lam", .atom x, .atom modStr, bodyExp] => do
-      let mp ← resolveModPath T mode modStr
-      let body ← elaborateSExp fuel' T mode (x :: locals) bodyExp
-      .ok (.lam x mp body)
-    | .list [.atom "fun", .atom x, bodyExp] => do
-      let mp := ModPath.id mode
-      let body ← elaborateSExp fuel' T mode (x :: locals) bodyExp
-      .ok (.lam x mp body)
-    | .list [.atom "let", .atom x, tyExp, valExp, bodyExp] => do
-      let ty ← elaborateSExp fuel' T mode locals tyExp
-      let val ← elaborateSExp fuel' T mode locals valExp
-      let body ← elaborateSExp fuel' T mode (x :: locals) bodyExp
-      .ok (.letIn x ty val body)
-    | .list [.atom "app_mod", fnExp, .atom modStr, argExp] => do
-      let mp ← resolveModPath T mode modStr
-      let fn ← elaborateSExp fuel' T mode locals fnExp
-      let arg ← elaborateSExp fuel' T mp.dom locals argExp
-      .ok (.app fn mp arg)
-    | .list [.atom "box", .atom modStr, tyExp] => do
-      let mp ← resolveModPath T mode modStr
-      let ty ← elaborateSExp fuel' T mp.dom locals tyExp
-      .ok (.modalBox mp ty)
-    | .list [.atom "box_intro", .atom modStr, subExp] => do
-      let mp ← resolveModPath T mode modStr
-      let sub ← elaborateSExp fuel' T mp.dom locals subExp
-      .ok (.boxIntro mp sub)
-    | .list (.atom "record" :: fieldExps) => do
-      let tele ← elabRecordTele fuel' T mode locals fieldExps
-      .ok (.recordTy tele)
-    | .list (.atom "tuple" :: fieldExps) => do
-      let fs ← elabTupleFields fuel' T mode locals fieldExps
-      .ok (.tuple fs)
-    | .list [.atom "proj", subExp, .atom fld] => do
-      let sub ← elaborateSExp fuel' T mode locals subExp
-      .ok (.proj sub fld)
-    | .list [.atom "funext", .atom x, bodyExp] => do
-      let mp := ModPath.id mode
-      let locals3 := (x ++ "2") :: (x ++ "1") :: (x ++ "0") :: locals
-      let body ← elaborateSExp fuel' T mode locals3 bodyExp
-      .ok (.funext Dir.hott mp body)
-    | .list [.atom "hap", pfExp, a0Exp, a1Exp, paExp] => do
-      let pf ← elaborateSExp fuel' T mode locals pfExp
-      let a0 ← elaborateSExp fuel' T mode locals a0Exp
-      let a1 ← elaborateSExp fuel' T mode locals a1Exp
-      let pa ← elaborateSExp fuel' T mode locals paExp
-      .ok (.hap Dir.hott pf a0 a1 pa)
-    | .list [.atom "u64_ifz", cExp, zExp, nzExp] => do
-      let c ← elaborateSExp fuel' T mode locals cExp
-      let z ← elaborateSExp fuel' T mode locals zExp
-      let nz ← elaborateSExp fuel' T mode locals nzExp
-      .ok (.u64IfZero c z nz)
-    | .list [.atom "u64_repeat", .atom cntStr, initExp, .atom accVar, stepExp] => do
-      match cntStr.toNat? with
-      | none => .error s!"Invalid u64_repeat count '{cntStr}'"
-      | some cnt => do
-        let init ← elaborateSExp fuel' T mode locals initExp
-        let step ← elaborateSExp fuel' T mode (accVar :: locals) stepExp
-        .ok (.u64Repeat cnt.toUInt64 init step)
-    | .list (.atom "Id" :: tyExp :: endExps) => do
-      let ty ← elaborateSExp fuel' T mode locals tyExp
-      let ends ← endExps.mapM (elaborateSExp fuel' T mode locals)
-      .ok (.obsEq Dir.hott ty ends)
-    | .list (.atom "Br" :: tyExp :: endExps) => do
-      let ty ← elaborateSExp fuel' T mode locals tyExp
-      let ends ← endExps.mapM (elaborateSExp fuel' T mode locals)
-      .ok (.obsEq (Dir.param 2) ty ends)
-    | .list [.atom "Disp", tyExp, e₀Exp] => do
-      let ty ← elaborateSExp fuel' T mode locals tyExp
-      let e₀ ← elaborateSExp fuel' T mode locals e₀Exp
-      .ok (.obsEq Dir.displayed ty [e₀])
-    | .list [.atom "Fresh", tyExp] => do
-      let ty ← elaborateSExp fuel' T mode locals tyExp
-      .ok (.obsEq Dir.nominal ty [])
-    | .list [.atom "refl", subExp] => do
-      let sub ← elaborateSExp fuel' T mode locals subExp
-      .ok (.refl Dir.hott sub)
-    | .list [.atom "refl_dir", .atom gStr, subExp] => do
-      let g ← resolveDir gStr
-      let sub ← elaborateSExp fuel' T mode locals subExp
-      .ok (.refl g sub)
-    | .list [.atom "Glue", aExp, bExp, relExp] => do
-      let a ← elaborateSExp fuel' T mode locals aExp
-      let b ← elaborateSExp fuel' T mode locals bExp
-      let r ← elaborateSExp fuel' T mode locals relExp
-      .ok (.gel Dir.hott [a, b] r)
-    | .list [.atom "Gel", aExp, bExp, relExp] => do
-      let a ← elaborateSExp fuel' T mode locals aExp
-      let b ← elaborateSExp fuel' T mode locals bExp
-      let r ← elaborateSExp fuel' T mode locals relExp
-      .ok (.gel (Dir.param 2) [a, b] r)
-    | .list [.atom "trr", lineExp, xExp] => do
-      let l ← elaborateSExp fuel' T mode locals lineExp
-      let x ← elaborateSExp fuel' T mode locals xExp
-      .ok (.trr Dir.hott l x)
-    | .list [.atom "trl", lineExp, xExp] => do
-      let l ← elaborateSExp fuel' T mode locals lineExp
-      let x ← elaborateSExp fuel' T mode locals xExp
-      .ok (.trl Dir.hott l x)
-    | .list [.atom "liftr", lineExp, xExp] => do
-      let l ← elaborateSExp fuel' T mode locals lineExp
-      let x ← elaborateSExp fuel' T mode locals xExp
-      .ok (.liftr Dir.hott l x)
-    | .list [.atom "liftl", lineExp, xExp] => do
-      let l ← elaborateSExp fuel' T mode locals lineExp
-      let x ← elaborateSExp fuel' T mode locals xExp
-      .ok (.liftl Dir.hott l x)
-    | .list [.atom "sym", pExp] => do
-      let p ← elaborateSExp fuel' T mode locals pExp
-      .ok (.sym Dir.hott p)
-    | .list [.atom "trans", pExp, qExp] => do
-      let p ← elaborateSExp fuel' T mode locals pExp
-      let q ← elaborateSExp fuel' T mode locals qExp
-      .ok (.trans Dir.hott p q)
-    | .list [.atom "arrow_line", dExp, cExp] => do
-      let d ← elaborateSExp fuel' T mode locals dExp
-      let c ← elaborateSExp fuel' T mode locals cExp
-      .ok (.arrowLine Dir.hott (ModPath.id mode) d c)
-    | .list [.atom "prod_line", .atom fN, .atom sN, fExp, sExp] => do
-      let f ← elaborateSExp fuel' T mode locals fExp
-      let s ← elaborateSExp fuel' T mode locals sExp
-      .ok (.prodLine Dir.hott fN sN f s)
-    | .list [.atom "box_line", .atom modStr, inExp] => do
-      let mp ← resolveModPath T mode modStr
-      let inner ← elaborateSExp fuel' T mp.dom locals inExp
-      .ok (.boxLine Dir.hott mp inner)
-    | .list [.atom opStr, lExp, rExp] =>
-      match resolveBinOp64 opStr with
-      | some bop => do
-        let l ← elaborateSExp fuel' T mode locals lExp
-        let r ← elaborateSExp fuel' T mode locals rExp
-        .ok (.u64BinOp bop l r)
-      | none => do
-        let fn ← elaborateSExp fuel' T mode locals (.atom opStr)
-        let a1 ← elaborateSExp fuel' T mode locals lExp
-        let a2 ← elaborateSExp fuel' T mode locals rExp
-        let mp := ModPath.id mode
-        .ok (.app (.app fn mp a1) mp a2)
-    | .list (fnExp :: argExps) => do
-      let fn ← elaborateSExp fuel' T mode locals fnExp
+      match elabBuiltinAtom? ident with
+      | some tm => .ok tm
+      | none =>
+        match findLocalIx? locals ident with
+        | some ix => .ok (.bvar ix)
+        | none => .ok (.global ident)
+    | .list [] => .error "Empty () expression"
+    | .list (.list fnList :: argExps) => do
+      let fn ← elaborateSExp fuel' T mode locals (.list fnList)
       let args ← argExps.mapM (elaborateSExp fuel' T mode locals)
       let mp := ModPath.id mode
       .ok (args.foldl (fun acc a => .app acc mp a) fn)
-    | .list [] => .error "Empty () expression"
+    | .list (.atom head :: argExps) =>
+      if !isReservedListHead head then do
+        let fn ← elaborateSExp fuel' T mode locals (.atom head)
+        let args ← argExps.mapM (elaborateSExp fuel' T mode locals)
+        let mp := ModPath.id mode
+        .ok (args.foldl (fun acc a => .app acc mp a) fn)
+      else
+        match head, argExps with
+        | "u64", [.atom numStr] =>
+          match numStr.toNat? with
+          | some n => .ok (.u64Lit n.toUInt64)
+          | none => .error s!"Invalid U64 literal '{numStr}'"
+        | "?", [.atom idStr] | "hole", [.atom idStr] =>
+          match idStr.toNat? with
+          | some id => .ok (.mvar id)
+          | none => .error s!"Invalid hole id '{idStr}'"
+        | "Type", [.atom lvlStr] =>
+          match lvlStr.toNat? with
+          | some l => .ok (.uu l)
+          | none => .error s!"Invalid universe level '{lvlStr}'"
+        | "succ", [nExp] => do
+          let n ← elaborateSExp fuel' T mode locals nExp
+          .ok (.ctor "Nat" "succ" [n])
+        | "pi", [.atom x, .atom modStr, domExp, codExp] => do
+          let mp ← resolveModPath T mode modStr
+          let dom ← elaborateSExp fuel' T mp.dom locals domExp
+          let cod ← elaborateSExp fuel' T mode (x :: locals) codExp
+          .ok (.pi x mp dom cod)
+        | "arrow", [domExp, codExp] => do
+          let mp := ModPath.id mode
+          let dom ← elaborateSExp fuel' T mode locals domExp
+          let cod ← elaborateSExp fuel' T mode ("_" :: locals) codExp
+          .ok (.pi "_" mp dom cod)
+        | "lam", [.atom x, .atom modStr, bodyExp] => do
+          let mp ← resolveModPath T mode modStr
+          let body ← elaborateSExp fuel' T mode (x :: locals) bodyExp
+          .ok (.lam x mp body)
+        | "fun", [.atom x, bodyExp] => do
+          let mp := ModPath.id mode
+          let body ← elaborateSExp fuel' T mode (x :: locals) bodyExp
+          .ok (.lam x mp body)
+        | "let", [.atom x, tyExp, valExp, bodyExp] => do
+          let ty ← elaborateSExp fuel' T mode locals tyExp
+          let val ← elaborateSExp fuel' T mode locals valExp
+          let body ← elaborateSExp fuel' T mode (x :: locals) bodyExp
+          .ok (.letIn x ty val body)
+        | "app_mod", [fnExp, .atom modStr, argExp] => do
+          let mp ← resolveModPath T mode modStr
+          let fn ← elaborateSExp fuel' T mode locals fnExp
+          let arg ← elaborateSExp fuel' T mp.dom locals argExp
+          .ok (.app fn mp arg)
+        | "box", [.atom modStr, tyExp] => do
+          let mp ← resolveModPath T mode modStr
+          let ty ← elaborateSExp fuel' T mp.dom locals tyExp
+          .ok (.modalBox mp ty)
+        | "box_intro", [.atom modStr, subExp] => do
+          let mp ← resolveModPath T mode modStr
+          let sub ← elaborateSExp fuel' T mp.dom locals subExp
+          .ok (.boxIntro mp sub)
+        | "record", fieldExps => do
+          let tele ← elabRecordTele fuel' T mode locals fieldExps
+          .ok (.recordTy tele)
+        | "tuple", fieldExps => do
+          let fs ← elabTupleFields fuel' T mode locals fieldExps
+          .ok (.tuple fs)
+        | "proj", [subExp, .atom fld] => do
+          let sub ← elaborateSExp fuel' T mode locals subExp
+          .ok (.proj sub fld)
+        | "funext", [.atom x, bodyExp] => do
+          let mp := ModPath.id mode
+          let locals3 := (x ++ "2") :: (x ++ "1") :: (x ++ "0") :: locals
+          let body ← elaborateSExp fuel' T mode locals3 bodyExp
+          .ok (.funext Dir.hott mp body)
+        | "hap", [pfExp, a0Exp, a1Exp, paExp] => do
+          let pf ← elaborateSExp fuel' T mode locals pfExp
+          let a0 ← elaborateSExp fuel' T mode locals a0Exp
+          let a1 ← elaborateSExp fuel' T mode locals a1Exp
+          let pa ← elaborateSExp fuel' T mode locals paExp
+          .ok (.hap Dir.hott pf a0 a1 pa)
+        | "u64_ifz", [cExp, zExp, nzExp] => do
+          let c ← elaborateSExp fuel' T mode locals cExp
+          let z ← elaborateSExp fuel' T mode locals zExp
+          let nz ← elaborateSExp fuel' T mode locals nzExp
+          .ok (.u64IfZero c z nz)
+        | "u64_repeat", [.atom cntStr, initExp, .atom accVar, stepExp] =>
+          match cntStr.toNat? with
+          | none => .error s!"Invalid u64_repeat count '{cntStr}'"
+          | some cnt => do
+            let init ← elaborateSExp fuel' T mode locals initExp
+            let step ← elaborateSExp fuel' T mode (accVar :: locals) stepExp
+            .ok (.u64Repeat cnt.toUInt64 init step)
+        | "Id", tyExp :: endExps => do
+          let ty ← elaborateSExp fuel' T mode locals tyExp
+          let ends ← endExps.mapM (elaborateSExp fuel' T mode locals)
+          .ok (.obsEq Dir.hott ty ends)
+        | "Br", tyExp :: endExps => do
+          let ty ← elaborateSExp fuel' T mode locals tyExp
+          let ends ← endExps.mapM (elaborateSExp fuel' T mode locals)
+          .ok (.obsEq (Dir.param 2) ty ends)
+        | "Disp", [tyExp, e₀Exp] => do
+          let ty ← elaborateSExp fuel' T mode locals tyExp
+          let e₀ ← elaborateSExp fuel' T mode locals e₀Exp
+          .ok (.obsEq Dir.displayed ty [e₀])
+        | "Fresh", [tyExp] => do
+          let ty ← elaborateSExp fuel' T mode locals tyExp
+          .ok (.obsEq Dir.nominal ty [])
+        | "refl", [subExp] => do
+          let sub ← elaborateSExp fuel' T mode locals subExp
+          .ok (.refl Dir.hott sub)
+        | "refl_dir", [.atom gStr, subExp] => do
+          let g ← resolveDir gStr
+          let sub ← elaborateSExp fuel' T mode locals subExp
+          .ok (.refl g sub)
+        | "Glue", [aExp, bExp, relExp] => do
+          let a ← elaborateSExp fuel' T mode locals aExp
+          let b ← elaborateSExp fuel' T mode locals bExp
+          let r ← elaborateSExp fuel' T mode locals relExp
+          .ok (.gel Dir.hott [a, b] r)
+        | "Gel", [aExp, bExp, relExp] => do
+          let a ← elaborateSExp fuel' T mode locals aExp
+          let b ← elaborateSExp fuel' T mode locals bExp
+          let r ← elaborateSExp fuel' T mode locals relExp
+          .ok (.gel (Dir.param 2) [a, b] r)
+        | "trr", [lineExp, xExp] => do
+          let l ← elaborateSExp fuel' T mode locals lineExp
+          let x ← elaborateSExp fuel' T mode locals xExp
+          .ok (.trr Dir.hott l x)
+        | "trl", [lineExp, xExp] => do
+          let l ← elaborateSExp fuel' T mode locals lineExp
+          let x ← elaborateSExp fuel' T mode locals xExp
+          .ok (.trl Dir.hott l x)
+        | "liftr", [lineExp, xExp] => do
+          let l ← elaborateSExp fuel' T mode locals lineExp
+          let x ← elaborateSExp fuel' T mode locals xExp
+          .ok (.liftr Dir.hott l x)
+        | "liftl", [lineExp, xExp] => do
+          let l ← elaborateSExp fuel' T mode locals lineExp
+          let x ← elaborateSExp fuel' T mode locals xExp
+          .ok (.liftl Dir.hott l x)
+        | "sym", [pExp] => do
+          let p ← elaborateSExp fuel' T mode locals pExp
+          .ok (.sym Dir.hott p)
+        | "trans", [pExp, qExp] => do
+          let p ← elaborateSExp fuel' T mode locals pExp
+          let q ← elaborateSExp fuel' T mode locals qExp
+          .ok (.trans Dir.hott p q)
+        | "arrow_line", [dExp, cExp] => do
+          let d ← elaborateSExp fuel' T mode locals dExp
+          let c ← elaborateSExp fuel' T mode locals cExp
+          .ok (.arrowLine Dir.hott (ModPath.id mode) d c)
+        | "prod_line", [.atom fN, .atom sN, fExp, sExp] => do
+          let f ← elaborateSExp fuel' T mode locals fExp
+          let s ← elaborateSExp fuel' T mode locals sExp
+          .ok (.prodLine Dir.hott fN sN f s)
+        | "box_line", [.atom modStr, inExp] => do
+          let mp ← resolveModPath T mode modStr
+          let inner ← elaborateSExp fuel' T mp.dom locals inExp
+          .ok (.boxLine Dir.hott mp inner)
+        | opStr, [lExp, rExp] =>
+          match resolveBinOp64 opStr with
+          | some bop => do
+            let l ← elaborateSExp fuel' T mode locals lExp
+            let r ← elaborateSExp fuel' T mode locals rExp
+            .ok (.u64BinOp bop l r)
+          | none => do
+            let fn ← elaborateSExp fuel' T mode locals (.atom opStr)
+            let a1 ← elaborateSExp fuel' T mode locals lExp
+            let a2 ← elaborateSExp fuel' T mode locals rExp
+            let mp := ModPath.id mode
+            .ok (.app (.app fn mp a1) mp a2)
+        | head, args => do
+          let fn ← elaborateSExp fuel' T mode locals (.atom head)
+          let elArgs ← args.mapM (elaborateSExp fuel' T mode locals)
+          let mp := ModPath.id mode
+          .ok (elArgs.foldl (fun acc a => .app acc mp a) fn)
 end
 
 /-- Parse a single surface expression string into a `Term`. -/
