@@ -520,6 +520,7 @@ def evalTerm (fuel : Nat) (G : GlobalEnv) (env : List Val) (tm : Term) : Val :=
   | fuel' + 1 =>
     match tm with
     | .bvar ix => lookupValEnv env ix
+    | .mvar id => .neu (.mvar id) []
     | .global name =>
       match G.lookup? name with
       | some (.defn _ _ .kinetic _ body) =>
@@ -722,6 +723,7 @@ def quoteVal (fuel : Nat) (G : GlobalEnv) (depth : Nat) (v : Val) : Term :=
         | .lvar lvl =>
           let ix := if depth > lvl then depth - 1 - lvl else 0
           .bvar ix
+        | .mvar id => .mvar id
         | .ax name => .global name
         | .potential name => .global name
       quoteSpine fuel' G depth headTm rspine

@@ -21,6 +21,8 @@ open Narya.Dim Narya.Modal Narya.Modal.KeySynth
 inductive Head where
   /-- Bound variable at De Bruijn level `lvl` (0 = outermost context variable). -/
   | lvar (lvl : Lvl)
+  /-- Unsolved unification metavariable `?m_id` (`EQUAL.md:174`). -/
+  | mvar (id : Nat)
   /-- Postulated global axiom / opaque constant. -/
   | ax (name : String)
   /-- Potential (lazy coinductive) global constant awaiting projection/observation. -/

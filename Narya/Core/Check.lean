@@ -127,6 +127,8 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
   | 0 => .error "Typechecker out of fuel"
   | fuel' + 1 =>
     match tm with
+    | .mvar id =>
+      .error s!"Unsolved metavariable ?m{id} in kernel check (solve via Unify first)"
     | .bvar ix =>
       match Γ.entries[ix]? with
       | none => .error s!"Unbound De Bruijn index #{ix} (context length {Γ.length})"
