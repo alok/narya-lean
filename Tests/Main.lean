@@ -12,7 +12,8 @@
 import Narya
 
 open Narya.Dim Narya.Modal Narya.Modal.Combinators Narya.Modal.KeySynth
-open Narya.Core Narya.Syntax Narya.Elab Narya.Fast Narya.Compiler Narya.Examples
+open Narya.Core Narya.Core.Safety Narya.Core.Unify
+open Narya.Syntax Narya.Elab Narya.Fast Narya.Compiler Narya.Examples
 
 structure TestState where
   passed : Nat := 0
@@ -207,6 +208,63 @@ def runCoreTests (st : IO.Ref TestState) : IO Unit := do
   let calcTrNf := normalize hoTTWithNot [] 0 (.trr Dir.hott calcTm (.ctor "Bool" "true" []))
   assertCond st "HOTT calc_eq(Bool == Bool by uaNot == Bool by <- uaNot) checks and transports true ~> true"
     (calcCheckOk && calcTrNf == .ctor "Bool" "true" [])
+
+  -- 8. Open Problem G (`Safety.lean`): Strict Positivity, Guardedness, & `--without-K`:
+  assertCond st "Safety: strict positivity rejects (Bad -> Empty) -> Bad & accepts infinitary Ord"
+    (!checkDataSpecPositivity badNegativeSpec &&
+     !checkDataSpecPositivity doubleNegativeSpec &&
+     checkDataSpecPositivity brouwerOrdSpec)
+
+  assertCond st "Safety: guardedness rejects kinetic Loop := sig { f : Loop } & accepts potential SST"
+    (!checkDefGuardedness "Loop" .kinetic (.recordTy [("f", ModPath.id "M", .global "Loop")]) &&
+     checkDefGuardedness "SST" .potential (.recordTy [("vtx", ModPath.id "M", .uu 0), ("step", ModPath.id "M", .global "SST")]))
+
+  assertCond st "Safety: --without-K rejects nonlinear Id A x x (Axiom K) & accepts free-endpoint Id A x y"
+    (!checkWithoutKPathMatch (.pvar 0) (.pvar 0) &&
+     !checkWithoutKPathMatch (.pvar 0) (.pctor "succ" [.pvar 0]) &&
+     checkWithoutKPathMatch (.pvar 0) (.pvar 1))
+
+  -- 9. Open Problem F (`Unify.lean` / `EQUAL.md:170-202`): Ternary Glued Pattern Unification:
+  let idM := ModPath.id "M"
+  let mc0 := (MetaCtx.empty).addUnsolved 0 (.uu 0) 2
+  -- `?m0 x y ≡ notBool y` at depth 2 (`x = bvar 1`, `y = bvar 0`):
+  let lhsPat : Term := .app (.app (.mvar 0) idM (.bvar 1)) idM (.bvar 0)
+  let rhsGlued : Term := .app (.global "notBool") idM (.bvar 0)
+  let gluedSolOk :=
+    match unifyTerms hoTTWithNot mc0 2 lhsPat rhsGlued with
+    | .equal mc1 =>
+      mc1.generation == 1 &&
+      mc1.lookupSolutionTerm? 0 ==
+        some (.lam "x0" idM (.lam "x1" idM (.app (.global "notBool") idM (.bvar 0))))
+    | _ => false
+  assertCond st "Unify (EQUAL.md:188): Miller pattern ?m0 x y == notBool y preserves glued 'notBool' unfold-free!"
+    gluedSolOk
+
+  -- Pruning out-of-scope `y` by unfolding `constZero := fun z => zero` in `?m0 x ≡ constZero y`:
+  let GConst :=
+    match addCheckedDef hoTTWithNot "constZero"
+      (.pi "z" idM (.dataTy "Bool" []) (.dataTy "Nat" []))
+      (.lam "z" idM (.ctor "Nat" "zero" [])) with
+    | .ok g => g
+    | .error _ => hoTTWithNot
+  let lhsPrune : Term := .app (.mvar 0) idM (.bvar 1) -- only `x` (`lvl 0`) in spine!
+  let rhsPrune : Term := .app (.global "constZero") idM (.bvar 0) -- `y` (`lvl 1`) out of scope!
+  let pruneOk :=
+    match unifyTerms GConst mc0 2 lhsPrune rhsPrune with
+    | .equal mc1 =>
+      mc1.lookupSolutionTerm? 0 == some (.lam "x0" idM (.ctor "Nat" "zero" []))
+    | _ => false
+  assertCond st "Unify: ?m0 x == constZero y prunes out-of-scope y via glued fallback ~> fun x => zero"
+    pruneOk
+
+  -- Non-pattern spine `?m0 true == false` returns ternary `.blocked 0` without mutating `mc0`:
+  let nonPatLhs : Term := .app (.mvar 0) idM (.ctor "Bool" "true" [])
+  let nonPatBlocked :=
+    match unifyTerms hoTTWithNot mc0 0 nonPatLhs (.ctor "Bool" "false" []) with
+    | .blocked 0 mcB => mcB.generation == mc0.generation
+    | _ => false
+  assertCond st "Unify (EQUAL.md:174): non-pattern ?m0 true == false returns ternary .blocked without mutation"
+    nonPatBlocked
 
 def runSyntaxAndDSLTests (st : IO.Ref TestState) : IO Unit := do
   IO.println "── Suite 5: Lean 4 Metaprogramming DSL & `.ny` Script Runner (`Narya.Elab`, `Narya.Syntax`) ──"

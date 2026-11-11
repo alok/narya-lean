@@ -40,6 +40,8 @@ abbrev Lvl := Nat
 inductive Term where
   /-- De Bruijn index variable `x_i`. -/
   | bvar (ix : Ix)
+  /-- Unification metavariable `?m_id` (`EQUAL.md:170`). -/
+  | mvar (id : Nat)
   /-- Global constant / definition reference. -/
   | global (name : String)
   /-- Parametric/observational universe `UU lvl`. -/

@@ -52,6 +52,7 @@ def prettyTerm (names : List String) : Term → String
     match names[ix]? with
     | some n => n
     | none => s!"#{ix}"
+  | .mvar id => s!"?m{id}"
   | .global n => n
   | .uu 0 => "Type"
   | .uu l => s!"Type {l}"

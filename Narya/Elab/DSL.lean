@@ -20,6 +20,7 @@ open Narya.Dim Narya.Modal Narya.Modal.Combinators Narya.Core Narya.Syntax
     indexing and `ModeTheory` modality/2-cell resolution. -/
 inductive NTerm where
   | var (name : String)
+  | mvar (id : Nat)
   | uu (lvl : Nat)
   | uuExt (lvl : Nat)
   | pi (name : String) (modName : String) (dom : NTerm) (cod : NTerm)
@@ -101,6 +102,7 @@ def toCore (T : ModeTheory) (mode : ModeId) (locals : List String) : NTerm → N
       | "Unit" => .dataTy "Unit" []
       | "Empty" => .dataTy "Empty" []
       | _ => .global name
+  | .mvar id => .mvar id
   | .uu lvl => .uu lvl
   | .uuExt lvl => .uuExt lvl
   | .pi name modStr dom cod =>
@@ -184,6 +186,7 @@ syntax "==" narya_tm "by" "<-" narya_tm : narya_calc_step
 syntax "Type" : narya_tm
 syntax "Type " num : narya_tm
 syntax "Type_ext" : narya_tm
+syntax "meta" "(" num ")" : narya_tm
 syntax ident : narya_tm
 syntax "(" narya_tm ")" : narya_tm
 
@@ -260,6 +263,7 @@ macro_rules
   | `(narya_ntm! Type) => `(NTerm.uu 0)
   | `(narya_ntm! Type $n:num) => `(NTerm.uu $n)
   | `(narya_ntm! Type_ext) => `(NTerm.uuExt 0)
+  | `(narya_ntm! meta($n:num)) => `(NTerm.mvar $n)
   | `(narya_ntm! $x:ident) => `(NTerm.var $(quote x.getId.toString))
   | `(narya_ntm! ($t:narya_tm)) => `(narya_ntm! $t)
   | `(narya_ntm! ($x:ident : $a:narya_tm) → $b:narya_tm) =>
