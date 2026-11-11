@@ -36,6 +36,58 @@ abbrev Ix := Nat
 /-- De Bruijn level (0 = outermost binder in semantic environment). -/
 abbrev Lvl := Nat
 
+/-- Iterate `f` `n` times starting from `x` (`n` counted loop trips, purely structural on `Nat`). -/
+def iterN {α : Type} : Nat → (α → α) → α → α
+  | 0, _, x => x
+  | n + 1, f, x => iterN n f (f x)
+
+theorem iterN_congr {α : Type} (n : Nat) (f g : α → α) (x : α)
+    (hfg : ∀ a, f a = g a) : iterN n f x = iterN n g x := by
+  induction n generalizing x with
+  | zero => rfl
+  | succ k ih =>
+    simp only [iterN, hfg]
+    exact ih (g x)
+
+/-- Binary 64-bit machine operations shared across `Core` (`U64`), `HIR`, `MIR`, `LIR`, and `Arm64`. -/
+inductive BinOp64 where
+  | add
+  | sub
+  | mul
+  | bitAnd
+  | bitOr
+  | bitXor
+  | shl
+  | shr
+  deriving DecidableEq, Repr, Inhabited
+
+namespace BinOp64
+
+/-- Formal 64-bit machine word semantics of each `BinOp64`. -/
+@[inline]
+def eval (op : BinOp64) (a b : UInt64) : UInt64 :=
+  match op with
+  | .add => a + b
+  | .sub => a - b
+  | .mul => a * b
+  | .bitAnd => a &&& b
+  | .bitOr => a ||| b
+  | .bitXor => a ^^^ b
+  | .shl => a <<< (b &&& 63)
+  | .shr => a >>> (b &&& 63)
+
+def name : BinOp64 → String
+  | .add => "u64_add"
+  | .sub => "u64_sub"
+  | .mul => "u64_mul"
+  | .bitAnd => "u64_and"
+  | .bitOr => "u64_or"
+  | .bitXor => "u64_xor"
+  | .shl => "u64_shl"
+  | .shr => "u64_shr"
+
+end BinOp64
+
 /-- Checked core terms of `narya-lean`. -/
 inductive Term where
   /-- De Bruijn index variable `x_i`. -/
@@ -122,6 +174,20 @@ inductive Term where
   /-- HoTT path induction `J` on fibrant direction `g`. -/
   | pathJ (g : Dir) (ty : Term) (base : Term) (motive : Term)
       (reflCase : Term) (target : Term) (path : Term)
+  /-- Observational function extensionality `funext_g (λ x₀ x₁ px => body)` (`px = bvar 0`, `x₁ = bvar 1`, `x₀ = bvar 2`). -/
+  | funext (g : Dir) (mod : ModPath) (body : Term)
+  /-- Observational function-bridge application `hap_g pf a₀ a₁ pa` (`pf @ pa`). -/
+  | hap (g : Dir) (pf a₀ a₁ pa : Term)
+  /-- Built-in unboxed 64-bit machine word type `U64 : Type 0` (resolving unary `Nat` overhead!). -/
+  | u64Ty
+  /-- Unboxed 64-bit word literal. -/
+  | u64Lit (val : UInt64)
+  /-- Unboxed 64-bit ALU / bitwise primitive operation. -/
+  | u64BinOp (op : BinOp64) (lhs rhs : Term)
+  /-- Unboxed 64-bit conditional (`if cond == 0 then zBr else nzBr`). -/
+  | u64IfZero (cond zBr nzBr : Term)
+  /-- Unboxed 64-bit counted loop (`iters` trips starting at `init`, binding accumulator at `bvar 0` in `stepBody`). -/
+  | u64Repeat (iters : UInt64) (init stepBody : Term)
   deriving BEq, Repr
 
 instance : Inhabited Term := ⟨.uu 0⟩

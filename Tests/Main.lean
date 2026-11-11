@@ -12,7 +12,7 @@
 import Narya
 
 open Narya.Dim Narya.Modal Narya.Modal.Combinators Narya.Modal.KeySynth
-open Narya.Core Narya.Core.Safety Narya.Core.Unify
+open Narya.Core Narya.Core.Safety Narya.Core.Unify Narya.Core.Level Narya.Core.Linear
 open Narya.Syntax Narya.Elab Narya.Fast Narya.Compiler Narya.Examples
 
 structure TestState where
@@ -90,8 +90,8 @@ def runPackedAndTimeMTests (st : IO.Ref TestState) : IO Unit := do
 
 def runModalTests (st : IO.Ref TestState) : IO Unit := do
   IO.println "── Suite 3: 2-Categorical Mode Combinators & Key Synthesis (`Narya.Modal`) ──"
-  assertCond st "All 20 standard mode theories in catalog are well-formed (wf = true)"
-    (standardCatalog.all ModeTheory.wf && standardCatalog.length == 20)
+  assertCond st "All 21 standard mode theories in catalog are well-formed (wf = true)"
+    (standardCatalog.all ModeTheory.wf && standardCatalog.length == 21)
 
   let adj := adjunctionTheory
   let dual2 := opposite2Cat "adjunction" (opposite2Cat "dual1" adj)
@@ -265,6 +265,69 @@ def runCoreTests (st : IO.Ref TestState) : IO Unit := do
     | _ => false
   assertCond st "Unify (EQUAL.md:174): non-pattern ?m0 true == false returns ternary .blocked without mutation"
     nonPatBlocked
+
+  -- Open Problem I1: Predicative Mugen universe level algebra (`LevelExpr.checkLevelLeq`)
+  let u0 : LevelExpr := .lvar 0
+  let u1 : LevelExpr := .lvar 1
+  let levelOk :=
+    LevelExpr.checkLevelLeq (.max (.succ u0) u1) (.succ (.max u0 u1)) &&
+    !LevelExpr.checkLevelLeq (.succ u0) u0
+  assertCond st "Predicative Mugen LevelExpr: max(u+1, v) <= max(u,v)+1 holds & Girard u+1 <= u rejected!"
+    levelOk
+
+  -- Quantitative Type Theory (`0/1/ω`) & Benton LNL (`linearAdjointTheory`) linearity + FBIP check
+  let idLin := ModPath.id "Lin"
+  let bangMod :=
+    match linearAdjointTheory.findMod? "F", linearAdjointTheory.findMod? "G" with
+    | some F, some G => ModPath.comp (ModPath.atom F) (ModPath.atom G)
+    | _, _ => idLin
+  let ghostMod :=
+    match linearAdjointTheory.findMod? "Ghost0" with
+    | some g => ModPath.atom g
+    | none => idLin
+  let qttOk :=
+    !isLinearityValid linearAdjointTheory "Lin" (.lam "x" idLin (.u64BinOp .add (.bvar 0) (.bvar 0))) &&
+    isLinearityValid linearAdjointTheory "Lin"
+      (.lam "x" idLin (.u64IfZero (.u64Lit 0) (.bvar 0) (.u64BinOp .add (.bvar 0) (.u64Lit 1)))) &&
+    isLinearityValid linearAdjointTheory "Lin" (.lam "x" bangMod (.u64BinOp .add (.bvar 0) (.bvar 0))) &&
+    !isLinearityValid linearAdjointTheory "Lin" (.lam "g" ghostMod (.bvar 0)) &&
+    canMutateInPlace (.u64BinOp .bitXor (.bvar 0) (.u64Lit 0xFF))
+  assertCond st "QTT + LNL (linearAdjointTheory): rejects linear dup & Ghost0 leak, accepts branch sharing & !-dup!"
+    qttOk
+
+  -- Open Problem I2: Observational funext + hap & coinductive Stream bisimulation projection
+  let fextTerm : Term :=
+    .hap .hott (.funext .hott idM (.refl .hott (.u64BinOp .add (.bvar 2) (.u64Lit 10))))
+      (.u64Lit 5) (.u64Lit 5) (.refl .hott (.u64Lit 5))
+  let fextOk := evalTerm 32 hoTTWithNot [] fextTerm == .refl .hott (.u64Lit 15)
+  assertCond st "Observational funext + hap: hap(funext(x => refl(x + 10)), 5, 5, refl 5) ~> refl 15!"
+    fextOk
+
+  let streamTy : Term := .recordTy [("hd", idM, .u64Ty), ("tl", idM, .global "StreamU64")]
+  let streamRes : Except String GlobalEnv := do
+    let G1 ← addCheckedDef hoTTWithNot "StreamU64" (.uu 0) streamTy .potential
+    let G2 ← addCheckedDef G1 "sevens" (.global "StreamU64")
+      (.tuple [("hd", .u64Lit 7), ("tl", .global "sevens")]) .potential
+    let bisimTy := .obsEq .hott (.global "StreamU64") [.global "sevens", .global "sevens"]
+    let G3 ← addCheckedDef G2 "sevensBisim" bisimTy
+      (.tuple [("hd", .refl .hott (.u64Lit 7)), ("tl", .global "sevensBisim")]) .potential
+    pure G3
+  let bisimOk :=
+    match streamRes with
+    | .ok gStream =>
+      evalTerm 16 gStream [] (.proj (.proj (.global "sevensBisim") "tl") "hd") == .refl .hott (.u64Lit 7)
+    | .error _ => false
+  assertCond st "Coinductive StreamU64 bisimulation checks & projects sevensBisim.tl.hd ~> refl 7!"
+    bisimOk
+
+  -- Core U64 evaluation + HIR.eraseFromCore agreement on loop + erased refl proof
+  let coreLoop : Term :=
+    .letIn "proof" (.obsEq .hott .u64Ty [.u64Lit 27, .u64Lit 27]) (.refl .hott (.u64Lit 27))
+      (.u64Repeat 10 (.u64Lit 1) (.u64BinOp .add (.bvar 0) (.u64Lit 4)))
+  let coreVal := evalTerm 64 hoTTWithNot [] coreLoop
+  let hirErasedVal := HIR.eval 0 0 [] (HIR.eraseFromCore coreLoop)
+  assertCond st "Core U64 NbE + erased refl agrees with HIR.eraseFromCore (u64Repeat 10 1 (+4) == 41)"
+    (coreVal == .u64Lit 41 && hirErasedVal == 41)
 
 def runSyntaxAndDSLTests (st : IO.Ref TestState) : IO Unit := do
   IO.println "── Suite 5: Lean 4 Metaprogramming DSL & `.ny` Script Runner (`Narya.Elab`, `Narya.Syntax`) ──"

@@ -132,6 +132,12 @@ def mentionsMeta (m : MetaId) : Term → Bool
   | .pathJ _ t b mot rc tg p =>
     mentionsMeta m t || mentionsMeta m b || mentionsMeta m mot ||
     mentionsMeta m rc || mentionsMeta m tg || mentionsMeta m p
+  | .funext _ _ b => mentionsMeta m b
+  | .hap _ pf a₀ a₁ pa =>
+    mentionsMeta m pf || mentionsMeta m a₀ || mentionsMeta m a₁ || mentionsMeta m pa
+  | .u64Ty | .u64Lit _ => false
+  | .u64BinOp _ l r | .u64Repeat _ l r => mentionsMeta m l || mentionsMeta m r
+  | .u64IfZero c z nz => mentionsMeta m c || mentionsMeta m z || mentionsMeta m nz
 
 end
 
@@ -304,6 +310,8 @@ def quotePatternRHS? (fuel : Nat) (G : GlobalEnv) (mc : MetaCtx) (targetMeta : M
       let qP ← quotePatternRHS? fuel' G mc targetMeta outerDepth localDepth spineLvlsRev p
       let qQ ← quotePatternRHS? fuel' G mc targetMeta outerDepth localDepth spineLvlsRev q
       some (.trans g qP qQ)
+    | .u64Ty => some .u64Ty
+    | .u64Lit n => some (.u64Lit n)
     | _ => none
 
 end
@@ -487,6 +495,8 @@ def unifyVal (fuel : Nat) (G : GlobalEnv) (policy : FallbackPolicy)
         match unifyVal fuel' G policy allowSpec speculative mc depth p₁ p₂ with
         | .equal mc' => unifyVal fuel' G policy allowSpec speculative mc' depth q₁ q₂
         | other => other
+    | .u64Ty, .u64Ty => .equal mc
+    | .u64Lit a, .u64Lit b => if a == b then .equal mc else .notEqual
     | _, _ => .notEqual
 
 end

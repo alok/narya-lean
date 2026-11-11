@@ -9,3 +9,5 @@ import Narya.Core.Check
 import Narya.Core.ModalHoTT
 import Narya.Core.Safety
 import Narya.Core.Unify
+import Narya.Core.Level
+import Narya.Core.Linear

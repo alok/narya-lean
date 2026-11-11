@@ -365,4 +365,52 @@ theorem sym_involutive_neu (G : GlobalEnv) (hd : Head) (sp : List Elim)
         simp [evalSym, hNe]
     | _ => simp [evalSym]
 
+/-! ## Open Problem I2: Computational Function Extensionality & Coinductive Bisimulation (`observational.rst`, `codata-types.rst`) -/
+
+/-- **Theorem I2.1 (`funext_beta_computes`)**:
+    Computational Function Extensionality β-law: applying `funext g mod body` via `hap` to
+    endpoint arguments `(a₀, a₁)` and argument bridge `pa` reduces definitionally in NbE
+    to `body[x₀ := a₀, x₁ := a₁, px := pa]`! -/
+theorem funext_beta_computes (fuel : Nat) (G : GlobalEnv) (g : Dir) (mod : ModPath)
+    (env : List Val) (body : Term) (a₀ a₁ pa : Val) :
+    evalHap (fuel + 1) G g (.funext g mod env body) a₀ a₁ pa =
+      evalTerm fuel G (pa :: a₁ :: a₀ :: env) body := by
+  simp [evalHap]
+
+/-- **Theorem I2.2 (`funext_refl_agrees_with_ap`)**:
+    Applying a reflexive function bridge `refl g fn` via `hap` to `(a₀, a₁, pa)` reduces
+    definitionally to observational congruence `evalAp g fn pa`! -/
+theorem funext_refl_agrees_with_ap (fuel : Nat) (G : GlobalEnv) (g : Dir)
+    (fn a₀ a₁ pa : Val) :
+    evalHap (fuel + 1) G g (.refl g fn) a₀ a₁ pa = evalAp fuel G g fn pa := by
+  simp [evalHap]
+
+/-- **Theorem I2.3 (`record_refl_proj_computes`)**:
+    Projecting `.fld` from a reflexive record/codata bridge `refl g r` reduces definitionally
+    to `refl g (r.fld)`! -/
+theorem record_refl_proj_computes (fuel : Nat) (G : GlobalEnv) (g : Dir) (r : Val) (fld : String) :
+    projVal (fuel + 1) G (.refl g r) fld = .refl g (projVal fuel G r fld) := by
+  simp [projVal]
+
+/-- **Theorem I2.4 (`coinductive_stream_bisim_computes`)**:
+    Higher Observational Coinductive Bisimulation: defining a lazy `Energy.potential` stream
+    bisimulation `bisim := ⟨hd := refl .hott v, tl := bisim⟩` terminates productively and
+    projecting `.hd` or `.tl.hd` computes `refl .hott v` in finite NbE steps without diverging! -/
+theorem coinductive_stream_bisim_computes :
+    let bisimBody : Term :=
+      .tuple [("hd", .refl .hott (.u64Lit 7)), ("tl", .global "bisim")]
+    let G : GlobalEnv :=
+      (GlobalEnv.empty pureHoTT).add
+        (.defn "bisim" "M" .potential (.uu 0) bisimBody)
+    projVal 6 G (evalTerm 6 G [] (.global "bisim")) "hd" = .refl .hott (.u64Lit 7) ∧
+    projVal 8 G (projVal 8 G (evalTerm 8 G [] (.global "bisim")) "tl") "hd" =
+      .refl .hott (.u64Lit 7) := by
+  have hBisim : strEq "bisim" "bisim" = true := by decide
+  have hHd : strEq "hd" "hd" = true := by decide
+  have hHdTl : strEq "hd" "tl" = false := by decide
+  have hTl : strEq "tl" "tl" = true := by decide
+  simp [projVal, evalTerm, GlobalEnv.empty, GlobalEnv.add, GlobalEnv.lookup?,
+        replaySpine, evalTupleFields, lookupTupleField?, List.findSome?,
+        hBisim, hHd, hHdTl, hTl]
+
 end Narya.Core.ModalHoTT

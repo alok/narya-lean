@@ -103,6 +103,9 @@ def projVal (fuel : Nat) (G : GlobalEnv) (v : Val) (field : String) : Val :=
       match lookupTupleField? fields field with
       | some fv => fv
       | none => .neu (.ax "<missing-field>") [.proj field]
+    | .refl g inner =>
+      -- Observational coinductive/record bisimulation: `(refl_g r).fld ↝ refl_g (r.fld)`!
+      .refl g (projVal fuel' G inner field)
     | .glued name rspine forced =>
       .glued name (.proj field :: rspine) (projVal fuel' G forced field)
     | .neu (.potential name) rspine =>
@@ -136,6 +139,14 @@ def replaySpine (fuel : Nat) (G : GlobalEnv) (v : Val) : List Elim → Val
           evalMatch fuel' G v winMod motive branches env
         | .pathJ g ty base motive reflCase target =>
           evalPathJ fuel' G g ty base motive reflCase target v
+        | .hap g a₀ a₁ pa =>
+          evalHap fuel' G g v a₀ a₁ pa
+        | .u64BinOpL op rhs =>
+          evalU64BinOp fuel' G op v rhs
+        | .u64BinOpR op lhs =>
+          evalU64BinOp fuel' G op (.u64Lit lhs) v
+        | .u64IfZero zBr nzBr =>
+          evalU64IfZero v zBr nzBr
       replaySpine fuel' G v' es
 
 /-- Compute homogeneous observational equality/bridge type `ObsEq g ty ends`. -/
@@ -496,6 +507,46 @@ def evalPathJ (fuel : Nat) (G : GlobalEnv) (g : Dir) (ty base motive reflCase ta
       .neu hd (.pathJ g ty base motive reflCase target :: rspine)
     | _ => .neu (.ax "<stuck-J>") [.pathJ g ty base motive reflCase target]
 
+/-- Compute observational function-bridge application `hap g pf a₀ a₁ pa`:
+    - `hap g (funext g mod body) a₀ a₁ pa ↝ body[a₀, a₁, pa]` (computational `funext` β-law!)
+    - `hap g (refl g fn) a₀ a₁ pa ↝ ap g fn pa` (reflexive function bridge agrees with `ap`!) -/
+def evalHap (fuel : Nat) (G : GlobalEnv) (g : Dir) (pf a₀ a₁ pa : Val) : Val :=
+  match fuel with
+  | 0 => .neu (.ax "<hap-fuel>") [.hap g a₀ a₁ pa]
+  | fuel' + 1 =>
+    match pf with
+    | .funext g' _ env body =>
+      if g == g' then evalTerm fuel' G (pa :: a₁ :: a₀ :: env) body
+      else .neu (.ax "<hap-dir>") [.hap g a₀ a₁ pa]
+    | .refl g' fn =>
+      if g == g' then evalAp fuel' G g fn pa
+      else .neu (.ax "<hap-dir>") [.hap g a₀ a₁ pa]
+    | .glued name rspine forced =>
+      .glued name (.hap g a₀ a₁ pa :: rspine) (evalHap fuel' G g forced a₀ a₁ pa)
+    | .neu hd rspine =>
+      .neu hd (.hap g a₀ a₁ pa :: rspine)
+    | _ => .neu (.ax "<stuck-hap>") [.hap g a₀ a₁ pa]
+
+/-- Compute 64-bit word ALU operation `u64BinOp op lhs rhs`. -/
+def evalU64BinOp (fuel : Nat) (G : GlobalEnv) (op : BinOp64) (lhs rhs : Val) : Val :=
+  match fuel with
+  | 0 => .neu (.ax "<u64-fuel>") [.u64BinOpL op rhs]
+  | fuel' + 1 =>
+    match lhs, rhs with
+    | .u64Lit a, .u64Lit b => .u64Lit (op.eval a b)
+    | .glued _ _ f₁, _ => evalU64BinOp fuel' G op f₁ rhs
+    | _, .glued _ _ f₂ => evalU64BinOp fuel' G op lhs f₂
+    | .neu hd sp, _ => .neu hd (.u64BinOpL op rhs :: sp)
+    | .u64Lit a, .neu hd sp => .neu hd (.u64BinOpR op a :: sp)
+    | _, _ => .neu (.ax "<stuck-u64-op>") [.u64BinOpL op rhs]
+
+/-- Compute 64-bit zero conditional `u64IfZero cond zBr nzBr`. -/
+def evalU64IfZero (cond zBr nzBr : Val) : Val :=
+  match cond.force with
+  | .u64Lit c => if c == 0 then zBr else nzBr
+  | .neu hd sp => .neu hd (.u64IfZero zBr nzBr :: sp)
+  | _ => .neu (.ax "<stuck-u64-if>") [.u64IfZero zBr nzBr]
+
 /-- Evaluate a list of `Term`s in `env`. -/
 def evalTerms (fuel : Nat) (G : GlobalEnv) (env : List Val) : List Term → List Val
   | [] => []
@@ -607,6 +658,27 @@ def evalTerm (fuel : Nat) (G : GlobalEnv) (env : List Val) (tm : Term) : Val :=
         (evalTerm fuel' G env reflCase)
         (evalTerm fuel' G env target)
         (evalTerm fuel' G env path)
+    | .funext g mod body =>
+      .funext g mod env body
+    | .hap g pf a₀ a₁ pa =>
+      evalHap fuel' G g
+        (evalTerm fuel' G env pf)
+        (evalTerm fuel' G env a₀)
+        (evalTerm fuel' G env a₁)
+        (evalTerm fuel' G env pa)
+    | .u64Ty => .u64Ty
+    | .u64Lit v => .u64Lit v
+    | .u64BinOp op l r =>
+      evalU64BinOp fuel' G op (evalTerm fuel' G env l) (evalTerm fuel' G env r)
+    | .u64IfZero c z nz =>
+      match (evalTerm fuel' G env c).force with
+      | .u64Lit cv =>
+        if cv == 0 then evalTerm fuel' G env z else evalTerm fuel' G env nz
+      | cOther =>
+        evalU64IfZero cOther (evalTerm fuel' G env z) (evalTerm fuel' G env nz)
+    | .u64Repeat iters init stepBody =>
+      let vInit := evalTerm fuel' G env init
+      iterN iters.toNat (fun acc => evalTerm fuel' G (acc :: env) stepBody) vInit
 
 end
 
@@ -669,6 +741,14 @@ def quoteSpine (fuel : Nat) (G : GlobalEnv) (depth : Nat) (base : Term) : List E
         .pathJ g (quoteVal fuel' G depth ty) (quoteVal fuel' G depth baseV)
           (quoteVal fuel' G depth motive) (quoteVal fuel' G depth reflC)
           (quoteVal fuel' G depth target) prev
+      | .hap g a₀ a₁ pa =>
+        .hap g prev (quoteVal fuel' G depth a₀) (quoteVal fuel' G depth a₁) (quoteVal fuel' G depth pa)
+      | .u64BinOpL op rhs =>
+        .u64BinOp op prev (quoteVal fuel' G depth rhs)
+      | .u64BinOpR op lhs =>
+        .u64BinOp op (.u64Lit lhs) prev
+      | .u64IfZero zBr nzBr =>
+        .u64IfZero prev (quoteVal fuel' G depth zBr) (quoteVal fuel' G depth nzBr)
 
 def quoteBranches (fuel : Nat) (G : GlobalEnv) (depth : Nat) (env : List Val) :
     List (String × Nat × Term) → List (String × Nat × Term)
@@ -781,6 +861,14 @@ def quoteVal (fuel : Nat) (G : GlobalEnv) (depth : Nat) (v : Val) : Term :=
       .liftr g (quoteVal fuel' G depth tyL) (quoteVal fuel' G depth x₀)
     | .liftl g tyL x₁ =>
       .liftl g (quoteVal fuel' G depth tyL) (quoteVal fuel' G depth x₁)
+    | .funext g mod env body =>
+      let v0 := Val.vvar depth
+      let v1 := Val.vvar (depth + 1)
+      let v2 := Val.vvar (depth + 2)
+      let qBody := quoteVal fuel' G (depth + 3) (evalTerm fuel' G (v2 :: v1 :: v0 :: env) body)
+      .funext g mod qBody
+    | .u64Ty => .u64Ty
+    | .u64Lit v => .u64Lit v
 
 end
 

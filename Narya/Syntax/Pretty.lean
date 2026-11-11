@@ -144,6 +144,18 @@ def prettyTerm (names : List String) : Term → String
     s!"(boxLine[{mod.pretty}] {prettyTerm names inL})"
   | .pathJ _ _ base _ reflC target path =>
     s!"(J {prettyTerm names base} {prettyTerm names reflC} {prettyTerm names target} {prettyTerm names path})"
+  | .funext _ mod body =>
+    let bNames := ["px", "x1", "x0"] ++ names
+    if mod.steps.isEmpty then s!"(funext {prettyTerm bNames body})"
+    else s!"(funext@{mod.pretty} {prettyTerm bNames body})"
+  | .hap _ pf a₀ a₁ pa =>
+    s!"(hap {prettyTerm names pf} {prettyTerm names a₀} {prettyTerm names a₁} {prettyTerm names pa})"
+  | .u64Ty => "U64"
+  | .u64Lit v => s!"{v}u64"
+  | .u64BinOp op l r => s!"({op.name} {prettyTerm names l} {prettyTerm names r})"
+  | .u64IfZero c z nz => s!"(u64_ifz {prettyTerm names c} {prettyTerm names z} {prettyTerm names nz})"
+  | .u64Repeat iters init step =>
+    s!"(u64_repeat {iters} {prettyTerm names init} (fun acc => {prettyTerm ("acc" :: names) step}))"
 
 end
 

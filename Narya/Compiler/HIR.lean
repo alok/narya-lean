@@ -15,47 +15,7 @@ namespace Narya.Compiler
 
 open Narya.Core
 
-/-- Iterate `f` `n` times starting from `x` (`n` counted loop trips). -/
-def iterN {α : Type} : Nat → (α → α) → α → α
-  | 0, _, x => x
-  | n + 1, f, x => iterN n f (f x)
-
-theorem iterN_congr {α : Type} (n : Nat) (f g : α → α) (x : α)
-    (hfg : ∀ a, f a = g a) : iterN n f x = iterN n g x := by
-  induction n generalizing x with
-  | zero => rfl
-  | succ k ih =>
-    simp only [iterN, hfg]
-    exact ih (g x)
-
-/-- Binary 64-bit machine operations in `HIR`, `MIR`, `LIR`, and `Arm64`. -/
-inductive BinOp64 where
-  | add
-  | sub
-  | mul
-  | bitAnd
-  | bitOr
-  | bitXor
-  | shl
-  | shr
-  deriving DecidableEq, Repr, Inhabited
-
-namespace BinOp64
-
-/-- Formal 64-bit machine word semantics of each `BinOp64`. -/
-@[inline]
-def eval (op : BinOp64) (a b : UInt64) : UInt64 :=
-  match op with
-  | .add => a + b
-  | .sub => a - b
-  | .mul => a * b
-  | .bitAnd => a &&& b
-  | .bitOr => a ||| b
-  | .bitXor => a ^^^ b
-  | .shl => a <<< (b &&& 63)
-  | .shr => a >>> (b &&& 63)
-
-end BinOp64
+export Narya.Core (iterN iterN_congr BinOp64)
 
 /-- High-Level Erased IR (`HIR`): Computational core after erasing universe types,
     observational bridges (`refl`), modal boxes (`boxIntro`), and 2-cell keys (`key`). -/
@@ -99,9 +59,14 @@ def eval (p₀ p₁ : UInt64) (env : List UInt64) : HIR → UInt64
 /-! ### Erasure from `Narya.Core.Term` to `HIR` -/
 
 /-- Erase modal coercions, positive boxes, and reflexivity bridges from a `Narya.Core.Term`
-    into computational `HIR` (mapping `Nat` constructors `zero`/`succ` to 64-bit arithmetic). -/
+    into computational `HIR` (mapping `U64` primitives, `letIn`, and `Nat`/`Bool` constructors
+    directly to 64-bit hardware operations). -/
 def eraseFromCore : Term → HIR
   | .bvar ix => .var ix
+  | .u64Lit v => .lit v
+  | .u64BinOp op l r => .binOp op (eraseFromCore l) (eraseFromCore r)
+  | .u64IfZero c z nz => .ifZero (eraseFromCore c) (eraseFromCore z) (eraseFromCore nz)
+  | .u64Repeat iters init step => .repeatLoop iters (eraseFromCore init) (eraseFromCore step)
   | .ctor "Nat" "zero" [] => .lit 0
   | .ctor "Nat" "succ" [n] => .binOp .add (eraseFromCore n) (.lit 1)
   | .ctor "Bool" "false" [] => .lit 0

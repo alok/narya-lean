@@ -54,6 +54,10 @@ inductive Elim where
   | matchData (winMod : ModPath) (motive : Val)
       (branches : List (String × Nat × Term)) (env : List Val)
   | pathJ (g : Dir) (ty : Val) (base : Val) (motive : Val) (reflCase : Val) (target : Val)
+  | hap (g : Dir) (a₀ a₁ pa : Val)
+  | u64BinOpL (op : BinOp64) (rhs : Val)
+  | u64BinOpR (op : BinOp64) (lhs : UInt64)
+  | u64IfZero (zBr nzBr : Val)
   deriving BEq, Repr
 
 /-- Glued semantic values of `narya-lean`. -/
@@ -111,6 +115,12 @@ inductive Val where
   | liftr (g : Dir) (tyLine : Val) (x₀ : Val)
   /-- Canonical fibrant backward path lift `liftl g tyLine x₁`. -/
   | liftl (g : Dir) (tyLine : Val) (x₁ : Val)
+  /-- Canonical pointwise function-bridge witness `funext g mod env body`. -/
+  | funext (g : Dir) (mod : ModPath) (env : List Val) (body : Term)
+  /-- Unboxed 64-bit machine word type `U64`. -/
+  | u64Ty
+  /-- Unboxed 64-bit machine word semantic value. -/
+  | u64Lit (val : UInt64)
   deriving BEq, Repr
 
 end
