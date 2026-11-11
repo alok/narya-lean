@@ -69,27 +69,38 @@ def cmdEval (theoryName : String) (exprSrc : String) : IO UInt32 := do
       return 0
 
 def cmdAsm : IO UInt32 := do
-  IO.println "=== 1. Verified AArch64 Assembly for `collatzStepHIR` (with `n * 2 ↝ lsl #1` strength reduction) ==="
+  IO.println "=== 1. Verified AArch64 Assembly for `collatzStepHIR` (zero-spill `x4..x7` + `n * 2 ↝ lsl #1`) ==="
   let collatzCode := Arm64.compileFullPipeline collatzStepHIR
-  IO.println (Arm64.renderDarwinArm64Asm collatzCode "_narya_entry")
+  IO.println (Arm64.renderNativeArm64Asm collatzCode)
   for n in ([27, 82, 1024] : List UInt64) do
     let spec := HIR.eval n 0 [] collatzStepHIR
     match ← Arm64.compileAndRunNative collatzStepHIR n 0 with
     | .ok hw =>
-      IO.println s!"  [Apple Silicon Mach-O] collatzStep({n}) = {hw}  (HIR spec = {spec}, match = {hw == spec})"
+      IO.println s!"  [Native AArch64] collatzStep({n}) = {hw}  (HIR spec = {spec}, match = {hw == spec})"
     | .error err =>
       IO.eprintln s!"  [Native execution skipped/failed]: {err}"
       return 1
   IO.println ""
-  IO.println "=== 2. Verified AArch64 Assembly for 64-Bit `mix64HIR` (`0xBF58476D1CE4E5B9` `movz`/`movk`) ==="
+  IO.println "=== 2. Verified AArch64 Hardware `cbnz x8` Loop for `collatzOrbit111HIR` (0 stack ops!) ==="
+  let orbitCode := Arm64.compileFullPipeline collatzOrbit111HIR
+  IO.println (Arm64.renderNativeArm64Asm orbitCode)
+  let specOrbit := HIR.eval 27 0 [] collatzOrbit111HIR
+  match ← Arm64.compileAndRunNative collatzOrbit111HIR 27 0 with
+  | .ok hwOrbit =>
+    IO.println s!"  [Native AArch64] collatzOrbit111(27) = {hwOrbit}  (HIR spec = {specOrbit}, match = {hwOrbit == specOrbit})"
+  | .error err =>
+    IO.eprintln s!"  [Native execution failed]: {err}"
+    return 1
+  IO.println ""
+  IO.println "=== 3. Verified AArch64 Assembly for 64-Bit `mix64HIR` (`0xBF58476D1CE4E5B9` `movz`/`movk`) ==="
   let mixCode := Arm64.compileFullPipeline mix64HIR
-  IO.println (Arm64.renderDarwinArm64Asm mixCode "_narya_entry")
+  IO.println (Arm64.renderNativeArm64Asm mixCode)
   let a0 : UInt64 := 0x123456789ABCDEF0
   let a1 : UInt64 := 0x0FEDCBA987654321
   let specMix := HIR.eval a0 a1 [] mix64HIR
   match ← Arm64.compileAndRunNative mix64HIR a0 a1 with
   | .ok hwMix =>
-    IO.println s!"  [Apple Silicon Mach-O] mix64(0x123456789ABCDEF0, 0x0FEDCBA987654321) = {hwMix}  (HIR spec = {specMix}, match = {hwMix == specMix})"
+    IO.println s!"  [Native AArch64] mix64(0x123456789ABCDEF0, 0x0FEDCBA987654321) = {hwMix}  (HIR spec = {specMix}, match = {hwMix == specMix})"
     return 0
   | .error err =>
     IO.eprintln s!"  [Native execution failed]: {err}"
@@ -128,18 +139,18 @@ def cmdBench : IO UInt32 := do
   let fastMs := (t2 - t1).toFloat / 1000000.0
   IO.println s!"[Wall-Clock {iters} checks] Ref={refMs} ms (sum={accRef}) | PackedU64={fastMs} ms (sum={accFast})"
 
-  -- 3. Native ARM64 execution verification:
+  -- 3. Native Register-Allocated Hardware `cbnz x8` Loop (`iteratedMix64LoopHIR`, 50,000 steps, 0 stack ops):
   let t3 ← IO.monoNanosNow
-  let mut accHir : UInt64 := 123456789
-  for i in [0:50000] do
-    accHir := HIR.eval accHir (UInt64.ofNat i) [] mix64HIR
+  let seed : UInt64 := 123456789 + UInt64.ofNat (t3 % 1)
+  let salt : UInt64 := 0x0FEDCBA987654321
+  let specLoop := HIR.eval seed salt [] iteratedMix64LoopHIR
   let t4 ← IO.monoNanosNow
   let hirMs := (t4 - t3).toFloat / 1000000.0
-  IO.println s!"[HIR Tree-Walk 50,000 steps] {hirMs} ms (checksum={accHir})"
+  let stackOps := LIR.countStackOps (LIR.lowerFromMIR (MIR.lowerFromHIR (HIR.opt iteratedMix64LoopHIR)))
+  IO.println s!"[HIR.eval 50,000-trip SplitMix64] {hirMs} ms (checksum={specLoop})"
 
-  -- Compare against native C loop calling emitted `_narya_entry` 50,000 times!
-  let instrs := Arm64.compileFullPipeline mix64HIR
-  let asmSrc := Arm64.renderDarwinArm64Asm instrs "_narya_entry"
+  let loopInstrs := Arm64.compileFullPipeline iteratedMix64LoopHIR
+  let asmSrc := Arm64.renderNativeArm64Asm loopInstrs
   let benchCSrc := String.intercalate "\n"
     [ "#include <stdint.h>"
     , "#include <stdio.h>"
@@ -149,8 +160,7 @@ def cmdBench : IO UInt32 := do
     , "int main(void) {"
     , "  struct timespec s, e;"
     , "  clock_gettime(CLOCK_MONOTONIC, &s);"
-    , "  uint64_t acc = 123456789ULL;"
-    , "  for (uint64_t i = 0; i < 50000ULL; ++i) { acc = narya_entry(acc, i); }"
+    , s!"  uint64_t acc = narya_entry({seed.toNat}ULL, {salt.toNat}ULL);"
     , "  clock_gettime(CLOCK_MONOTONIC, &e);"
     , "  double ms = (e.tv_sec - s.tv_sec) * 1000.0 + (e.tv_nsec - s.tv_nsec) / 1000000.0;"
     , "  printf(\"checksum=%\" PRIu64 \" native_ms=%.4f\\n\", acc, ms);"
@@ -164,13 +174,12 @@ def cmdBench : IO UInt32 := do
   try
     IO.FS.writeFile asmP asmSrc
     IO.FS.writeFile cP benchCSrc
-    let cc ← IO.Process.output {
-      cmd := "/usr/bin/clang"
-      args := #["-arch", "arm64", "-O2", asmP.toString, cP.toString, "-o", binP.toString]
-    }
-    if cc.exitCode == 0 then
+    match ← Arm64.compileNativeBinary asmP cP binP with
+    | .ok () =>
       let out ← IO.Process.output { cmd := binP.toString, args := #[] }
-      IO.println s!"[Native Apple Silicon `_narya_entry` 50,000 steps] {out.stdout.replace "\n" ""}"
+      IO.println s!"[Native AArch64 `cbnz x8` 50,000-trip loop (stackOps={stackOps})] {out.stdout.replace "\n" ""}"
+    | .error err =>
+      IO.eprintln s!"[Native bench skipped]: {err}"
   finally
     try IO.FS.removeFile asmP catch _ => pure ()
     try IO.FS.removeFile cP catch _ => pure ()

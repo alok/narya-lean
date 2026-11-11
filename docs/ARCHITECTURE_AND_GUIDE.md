@@ -144,9 +144,57 @@ Variable lookup checks `declMod ⇒ accLock` via `KeySynth.synthKey`:
    - `unique_natural_discrete_unit_arity1` ($k = 1$: uniquely pinned down to $\eta(x) = x$).
    - `no_unbiased_natural_discrete_unit_ge2` ($k \ge 2$: impossible to be both symmetric and diagonal by Bool-swap naturality, while vertex-biased projections $\pi_0$ satisfy associativity `vertex_biased_assoc`).
 
+### 4.4 Open Problem E: Coding Computational HOTT Fibrancy from Scratch (`NbE.lean`, `ModalHoTT.lean`)
+In Mike Shulman's Higher Observational Type Theory (`docs/source/hott.rst`, `lib/core/fibrancy.ml`), equality is **observational** (`Id A x y` computes according to the type constructor of `A`), while transport (`trr`, `trl`) and dependent path lifting (`liftr`, `liftl`) must compute strictly across type-former bridges without losing strict positivity of semantic values `Val`!
+
+**Why naive higher-order closures fail in Lean 4**:
+If you try to define `Val.lam : (Val → Val) → Val`, Lean 4's kernel rightly rejects `Val` for violating strict positivity. Conversely, if you try to compile dependent function transport `trr (piLine pA pB) f₀` by syntactically shifting De Bruijn indices inside `Term` at runtime, every transport step pays $O(|t|)$ AST traversal overhead and complicates termination proofs.
+
+**How we solve it cleanly (`Value.lean`, `NbE.lean`)**:
+1. **First-Order Transport Closures (`Closure`)**:
+   We extend the first-order `Closure` inductive (`Closure.term env body`) with four dedicated HOTT transport constructors:
+   - `arrowTrr (pA pB f₀ : Val)` & `arrowTrl (pA pB f₁ : Val)`
+   - `piTrr (pA : Val) (pB : Closure) (f₀ : Val)` & `piTrl (pA : Val) (pB : Closure) (f₁ : Val)`
+2. **Exact contravariant/covariant computation (`applyClosure` in `NbE.lean`)**:
+   When `f₁ := Val.lam name m (.piTrr pA pB f₀)` is applied to `a₁ : A₁`:
+   - Pull `a₁` **backward** along `pA` to the left endpoint: `a₀ := evalTrl fuel G .hott pA a₁`.
+   - Lift that backward transport to a bridge `pa : Id pA a₀ a₁` via `evalLiftl fuel G .hott pA a₁`.
+   - Instantiate the codomain bridge family `pB` at `pa` (`pBa := applyClosure fuel G pB pa`).
+   - Transport `f₀ a₀` **forward** along `pBa`: `evalTrr fuel G .hott pBa (applyVal fuel G f₀ m a₀)`!
+3. **Dependent Σ & Cross-Mode Modal Box Transport**:
+   - On `prodLine pA pB` and `sigLine pA pB`, `evalTrr` transports the first field `u₁ := trr pA u₀`, lifts `pu := liftr pA u₀ : Id pA u₀ u₁`, instantiates `pB pu`, and transports the second field along `pB pu` (`sigma_dependent_transport_computes`).
+   - On `boxLine m pA`, `evalTrr` commutes directly inside positive modal boxes: `trr (boxLine m pA) (box m a₀) ↝ box m (trr pA a₀)`, respecting cross-mode MTT locks (`modal_box_transport_computes`).
+4. **Equational Chains (`calc_eq`) & Involutive `sym`**:
+   - `evalTrans` reduces on **both** left and right `refl` (`trans refl q ↝ q` and `trans p refl ↝ p`), while `evalSym` cancels double symmetry on neutrals (`sym (sym p) ↝ p`, `sym_involutive_neu`) and flips `Glue` equivalences (`flipEquivFields`).
+
+### 4.5 Open Problem F: Glued Ternary Miller Pattern Unification (`Unify.lean`, `EQUAL.md:170–202`)
+Upstream Narya's `lib/core/EQUAL.md` (lines 170–202) documents three interlocking design problems when moving from pure conversion checking (`Equal.lean`) to unification with metavariables (`?m`):
+1. **Stateful mutation vs backtracking**: In OCaml, speculative glued comparisons (`equal_val` Tier 1) cannot safely mutate global metavariables if Tier 1 fails and falls back to forced unfolding, unless state is rolled back or re-checked (`localRetry` vs `strictSmalltt`).
+2. **Ternary blocking**: Non-pattern spines like `?m0 true ≡ false` are neither provably equal nor provably disequal (`?m0 := fun _ => false` might later solve it!), so returning `Bool` conflates *"definitely unequal"* with *"stucked on non-pattern meta"*.
+3. **Preserving glued abbreviations in solutions (`EQUAL.md:188`)**: Standard NbE pattern unification quotes the **forced** value of the RHS, unfolding user definitions like `notBool y` into raw `matchData` case trees inside synthesized meta solutions!
+
+**How to build `Narya/Core/Unify.lean`**:
+1. **Purely Functional Transactional `MetaCtx`**:
+   Store `entries : List (Nat × MetaEntry)` + a strictly increasing `generation : Nat` counter (`solveMeta_generation_strictly_increases`). Speculative Tier-1 spine unification (`unifyRigidSpines`) threads `mc`, and on `.notEqual` or `.blocked`, simply **discards** the speculative `MetaCtx` (`speculative_never_mutates_metas`)! When `generation` advances during a comparison (`mc'.generation > mc.generation`), `FallbackPolicy.localRetry` re-runs local conversion under the newly learned meta bindings instead of failing prematurely.
+2. **Ternary `UnifyOutcome`**:
+   `equal (mc' : MetaCtx) | notEqual | blocked (metaId : Nat) (mc' : MetaCtx)`.
+3. **Glued-First Miller Readback with Pruning Fallback (`quotePatternRHS?`)**:
+   Given `?m x₁ ... xₖ ≡ rhs` where `[x₁, ..., xₖ]` are distinct bound levels (`extractMillerSpine?`):
+   - When `rhs = .glued name rspine forced`: **first** attempt `quotePatternSpine? (.global name) rspine` checking that every free variable in `rspine` belongs to `{x₁, ..., xₖ}` and `?m` does not occur (`occursCheck_rejects_self_cycle`). If it succeeds, `?m` is solved as `fun x₁ ... xₖ => name ...` **without unfolding `name`**!
+   - If `rspine` mentions an out-of-scope variable `y ∉ {x₁, ..., xₖ}` (e.g. `?m0 x ≡ constZero y` where `constZero z := 0`), `quotePatternSpine?` returns `none`, and `quotePatternRHS?` **automatically falls back to `forced`** (`0`), pruning the dead dependency on `y` and solving `?m0 := fun x => 0`!
+
+### 4.6 Open Problem G: Strict Positivity, Coinductive Guardedness & `--without-K` (`Safety.lean`)
+A proof assistant combining inductive `data`, coinductive `codata`/`Energy.potential`, and computational univalence (`Glue`) faces three lethal consistency hazards if unchecked:
+1. **Non-positive inductives (`Bad := mk : (Bad → Empty) → Bad`)**: Yield Curry's/Girard's paradox in 4 lines without `Type : Type`. `checkDataSpecPositivity` forbids the inductive type name anywhere to the left of `Π`/`→` (`occursInTerm`), while allowing strictly positive recursive arguments and infinitary branching trees like Brouwer ordinals (`sup : (Nat → Ord) → Ord`).
+2. **Unguarded kinetic/potential recursion**: `checkDefGuardedness` forbids recursive references in `Energy.kinetic` definitions (`Loop := sig { f : Loop }`) and requires `Energy.potential` definitions (like `SST`) to guard every self-reference inside a negative type constructor (`.recordTy`, `.codataTy`, `.pi`) or lazy constructor wrapper.
+3. **Axiom K vs Univalence (`univalence_refutes_axiomK`)**:
+   Hofmann–Streicher's Axiom K (`∀ (p : Id Bool Bool), p = refl Bool`) contradicts univalence! In `Safety.lean`:
+   - `checkWithoutKPathMatch` enforces Cockx–Devriese–Piessens `--without-K` pattern matching: both path endpoints must be constructor-free (`isConstructorFreePat`) and linearly distinct (`(patVars lhs).all (fun v => !(patVars rhs).contains v)`), rejecting `Id A x x` (Axiom K) and `Id A x (succ x)` while accepting `J` (`Id A x y`).
+   - `univalence_refutes_axiomK` proves **directly inside Lean's kernel** (`0 sorry`) that `uaBool := Glue(Bool, Bool, notEquiv)` transports `true ↦ false` while `reflBool` transports `true ↦ true`, hence `uaBool ≠ reflBool`, refuting `AxiomK`!
+
 ---
 
-## 5. Layer 5: A Perfectible Programming Language & Verified ARM64 Backend (`Narya/Fast/`, `Narya/Compiler/`)
+## 5. Layer 5: A Perfectible Programming Language & Verified `AArch64` Backend (`Narya/Fast/`, `Narya/Compiler/`)
 
 ### 5.1 Connecting Type Theory, Cost Semantics (`TimeM`), and Optimization
 In *"A perfectable programming language"* (`alok.blog`), optimization is not an ad-hoc compiler black box: fast bit-packed or unboxed representations sit side-by-side with clear mathematical specifications, linked by representation bridges (`RepBridge` / `Gel`) and machine-checked cost certificates (`TimeM`, `VerifiedOpt`):
@@ -158,21 +206,43 @@ In *"A perfectable programming language"* (`alok.blog`), optimization is not an 
 - **Case Study 2 (`loopFusionOpt` in `TimeM.lean`)**:
   Proves two-pass heap list map+sum refines to single-pass register accumulation (`n + 1 < 2n + 2` ticks for all lists).
 
-### 5.2 Multi-IR Pipeline to Native Apple Silicon Mach-O (`HIR → MIR → LIR → Arm64`)
-Modeled directly on Leonardo de Moura's November 2026 SViL architecture (*"New Code Generator"*):
+### 5.2 Open Problem H: Coding Register Promotion & Counted Hardware Loops (`HIR → MIR → LIR → Arm64`)
+Modeled on Leonardo de Moura's November 2026 SViL architecture (*"New Code Generator"*), upgraded from a pure stack machine to a **register-promoting, hardware-loop compiler** across both **macOS Mach-O (`arm64-apple-darwin`)** and **Linux ELF (`aarch64-linux-gnu`)**:
 
 | Stage | Module | Key Responsibility | Correctness Theorem (`0 sorry`) |
 |---|---|---|---|
-| **1. HIR** | `Narya/Compiler/HIR.lean` | Erases modal `key`s, `boxIntro`s, and `refl` bridges (`eraseFromCore`); folds constants, eliminates dead branches, and strength-reduces `x * 2 ↝ x <<< 1` (`HIR.opt`) | `HIR.eval_opt_eq` |
-| **2. MIR** | `Narya/Compiler/MIR.lean` | Performs static variable use-count / uniqueness analysis (`OwnershipKind`: `dead`, `uniqueReg`, `sharedStack`) & explicit `joinIfZero` blocks (`MIR.lowerFromHIR`) | `MIR.eval_lower_eq` |
-| **3. LIR** | `Narya/Compiler/LIR.lean` | Lowers lexical scopes to exact stack-height-indexed 16-byte stack slots `[sp, #(16 * slot)]` + accumulator `acc` (`LIR.lowerFromMIR`) | `LIR.exec_lowerFromMIR_eq` |
-| **4. Arm64** | `Narya/Compiler/Arm64.lean` | Formal `AArch64` register/stack ISA, 4-instruction `movz`/`movk` 64-bit immediate materialization (`movzk_reconstruct_u64`), AAPCS64 prologue/epilogue, & Mach-O `.s` emission | `Arm64.compileFullPipeline_correct` & `Arm64.compileFullPipeline_stack_clean` |
+| **1. HIR** | `Narya/Compiler/HIR.lean` | Erases modal `key`s, `boxIntro`s, and `refl` bridges; folds constants, eliminates dead `ifZero` branches, strength-reduces `x * 2 ↝ x <<< 1`, eliminates 0-trip `repeatLoop`s, & unrolls 1-trip loops (`HIR.opt`) | `HIR.eval_opt_eq` |
+| **2. MIR** | `Narya/Compiler/MIR.lean` | Static variable use-count / uniqueness analysis (`OwnershipKind`), loop-nesting detection (`MIR.hasLoop`), `joinIfZero`, & `repeatLoop` (`MIR.lowerFromHIR`) | `MIR.eval_lower_eq` |
+| **3. LIR** | `Narya/Compiler/LIR.lean` | Promotes lexical variables, loop accumulators, & `binOp` LHS operands to caller-saved `LocalReg` (`x4..x7`) when `< 4` live (zero stack traffic!), spilling deeper scopes (`≥ 4`) to `[sp, #16*k]` (`LIR.lowerFromMIR`) | `LIR.exec_compileAux` & `LIR.exec_lowerFromMIR_acc_and_stack` |
+| **4. Arm64** | `Narya/Compiler/Arm64.lean` | Formal `AArch64` ISA (`x0..x8` + `sp`), `movz`/`movk` (`movzk_reconstruct_u64`), `loopX8` (`cbz`/`sub x8, #1`/`cbnz`), `x8` non-interference (`noLoopCode_preserves_x8`), & Mach-O / Linux ELF native runners | `Arm64.compileFullPipeline_correct` & `Arm64.compileFullPipeline_stack_clean` |
+
+#### Deep-Dive Engineering Walkthrough for Manual Implementation:
+1. **Zero-Overhead Caller-Saved Register Promotion (`x4..x7` in `LIR.compileAux`)**:
+   - Under AAPCS64 (both Apple Darwin and Linux), `x0` is return/arg0, `x1` is scratch/arg1, `x2..x3` hold saved `(arg0, arg1)`, **`x4..x7` are caller-saved registers** (requiring zero function prologue/epilogue stack spills!), and **`x8` is caller-saved** (used as our hardware loop counter).
+   - `compileAux (locs : List VarLoc) (usedRegs : Nat) (curH : Nat)` allocates monotonically in `usedRegs`:
+     - Whenever `usedRegs < 4`, `letAlloc`, `repeatLoop` accumulators, and `binOp` LHS operands bind `r = ⟨usedRegs, hReg⟩` (`x_{4+usedRegs}`) and compile their inner continuation at `usedRegs + 1`.
+     - Sequential sibling `letAlloc`s and `binOp`s **automatically reuse** `x_{4+usedRegs}` as soon as the previous subexpression finishes!
+     - Only when 4 outer registers are simultaneously live (`usedRegs ≥ 4`) does `compileAux` spill to `[sp, #16 * (curH - 1 - h)]`.
+   - **Inductive Simulation Postcondition**: Because `compileAux` at `usedRegs` may clobber dead scratch registers `≥ usedRegs`, the exact inductive postcondition in `LIR.exec_compileAux` is:
+     `st'.acc = MIR.eval p₀ p₁ env m ∧ st'.stack = st.stack ∧ (∀ r : LocalReg, r.val < usedRegs → st'.getLocal r = st.getLocal r)`.
+     Those three conjuncts compose cleanly across `binOp`, `letAlloc`, `joinIfZero`, and `repeatLoop`!
+2. **Nested-Safe Hardware Loops in `x8` (`loopX8` & `saveCounter`)**:
+   - What happens if an outer `repeatLoop` contains an inner `repeatLoop`? If both wrote to `x8` unconditionally, the inner loop would clobber the outer loop's `x8`!
+   - Solution: `MIR.hasLoop stepBody` checks statically whether `stepBody` contains an inner loop:
+     - **Inner / single hot loops (`saveCounter = false`)**: `noLoopCode_preserves_x8` proves `stepBody` never touches `x8` (`Reg64` only indexes `x0..x7`!). Emitted assembly loads `x8` once before the loop and runs `L_loop: <register-only body>; sub x8, x8, #1; cbnz x8, L_loop` with **zero memory ops (`LIR.countStackOps = 0`)**!
+     - **Outer loops (`saveCounter = true`)**: Each outer iteration executes `str x8, [sp, #-16]!`, runs `stepBody` compiled at stack depth `curH + 1` (so any `[sp, #16*slot]` offsets inside `stepBody` automatically account for the pushed `x8`!), and executes `ldr x8, [sp], #16` before `sub x8, x8, #1; cbnz x8, L_loop`!
+3. **Keeping `LIR.exec` and `Arm64.exec` Structural (`iterStep` Trick)**:
+   - If `runLoop` is placed inside a `mutual` block with `step` and `exec` using `termination_by`, Lean compiles `exec` via `WellFounded.fix`, which blocks fast kernel reduction under `decide`!
+   - By factoring out `iterStep : Bool → (State → State) → ...` and writing `iterN iters.toNat (iterStep save (exec body)) ...`, the recursive call `exec body` is passed directly on constructor child `body` **without `WellFounded.fix`**, keeping `step` and `exec` 100% structural!
+4. **Mach-O (`arm64-apple-darwin`) vs ELF (`aarch64-linux-gnu`) Assembly**:
+   - macOS Mach-O prefixes C symbols with `_` (`_narya_entry`) under `.section __TEXT,__text,regular,pure_instructions`.
+   - Linux ELF uses unprefixed symbols (`narya_entry`), `.type narya_entry, %function`, and `.section .note.GNU-stack,"",%progbits` (preventing GNU `ld` executable-stack warnings on Ubuntu 24.04 ARM64).
 
 ---
 
 ## 6. Developer Manual: Extending & Using `narya-lean`
 
-### 6.1 Writing Proofs in Lean 4 with `narya_hoTT!` and `narya!`
+### 6.1 Writing Proofs in Lean 4 with `narya_hoTT!`, `calc_eq`, and `narya!`
 Import `Narya` in any `.lean` file:
 ```lean
 import Narya
@@ -180,9 +250,10 @@ open Narya.Modal.Combinators Narya.Core Narya.Elab
 
 def G := GlobalEnv.withStdPrelude pureHoTT
 
--- Interactive InfoView typechecking & normalization:
+-- Interactive InfoView typechecking, equational chains & normalization:
 #narya_check [G] fun (A : _) => refl(A)
 #narya_eval  [G] trr(refl(Bool), true)
+#narya_eval  [hoTTWithNot] trr(calc_eq(Bool == Bool by Glue(Bool, Bool, notEquiv) == Bool by <- Glue(Bool, Bool, notEquiv)), true)
 ```
 
 ### 6.2 Defining Custom Mode Theories
@@ -202,31 +273,33 @@ def myDoubleAdj :=
     [("M1", "M1'")]
 ```
 
-### 6.3 Compiling & Running Verified Kernels on Apple Silicon
+### 6.3 Compiling & Running Zero-Spill Verified Hardware Loops (`AArch64`)
 ```lean
 import Narya
 open Narya.Compiler
 
-def myKernel : HIR :=
-  .letBind (.binOp .mul (.param ⟨0, by omega⟩) (.lit 2)) -- strength-reduced to `lsl #1`!
-    (.binOp .add (.var 0) (.param ⟨1, by omega⟩))
+def myLoopKernel : HIR :=
+  .repeatLoop 1000 (.param ⟨0, by omega⟩)
+    (.binOp .add (.binOp .mul (.var 0) (.lit 2)) (.param ⟨1, by omega⟩))
 
--- Automatic proof of AArch64 correctness for all 64-bit inputs:
-theorem myKernel_verified (x y : UInt64) :
-    (Arm64.exec (Arm64.compileFullPipeline myKernel) (Arm64State.initABI x y)).x0 =
-      HIR.eval x y [] myKernel :=
-  Arm64.compileFullPipeline_correct myKernel x y
+-- 1. Automatic proof of AArch64 correctness for all 64-bit inputs:
+theorem myLoopKernel_verified (x y : UInt64) :
+    (Arm64.exec (Arm64.compileFullPipeline myLoopKernel) (Arm64State.initABI x y)).x0 =
+      HIR.eval x y [] myLoopKernel :=
+  Arm64.compileFullPipeline_correct myLoopKernel x y
 
--- Inspect emitted Mach-O `.s` assembly or run natively via clang:
-#eval IO.println (Arm64.renderDarwinArm64Asm (Arm64.compileFullPipeline myKernel))
+-- 2. Automatic certificate of ZERO stack memory traffic (`x4..x7` + `x8` only!):
+theorem myLoopKernel_zero_spills :
+    LIR.countStackOps (LIR.lowerFromMIR (MIR.lowerFromHIR (HIR.opt myLoopKernel))) = 0 := by
+  decide
 ```
 
 ### 6.4 CLI Workflow (`lake exe narya`)
 ```bash
 lake build                                           # Build full library & compile-time #guard proofs
-lake test                                            # Run all 31 unit, modal, & live Mach-O hardware tests
+lake test                                            # Run all 47 unit, modal, unify, safety & native AArch64 tests
 lake exe narya catalog                               # Inspect all 20 built-in mode theories
 lake exe narya run examples/univalence_and_modal.ny  # Execute standalone .ny script
-lake exe narya asm                                   # Print verified ARM64 assembly & run on hardware
-lake exe narya bench                                 # Run TimeM + Apple Silicon benchmarks
+lake exe narya asm                                   # Print verified AArch64 assembly & run on hardware
+lake exe narya bench                                 # Run TimeM + 50,000-trip AArch64 loop benchmarks
 ```

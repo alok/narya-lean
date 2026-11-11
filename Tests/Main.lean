@@ -308,7 +308,7 @@ def runNativeArm64Tests (st : IO.Ref TestState) : IO Unit := do
     IO.eprintln s!"    clang error: {err}"
     assertCond st "mix64HIR native execution" false
 
-  -- Kernel 3: Deeply nested `letBind` + nested `ifZero` testing 16-byte stack frame slots `[sp, #16*k]`
+  -- Kernel 3: Deeply nested `letBind` + nested `ifZero`
   let deepStackHIR : HIR :=
     .letBind (.binOp .add (.param ⟨0, by omega⟩) (.lit 10))
       (.letBind (.binOp .mul (.var 0) (.lit 2))
@@ -320,11 +320,89 @@ def runNativeArm64Tests (st : IO.Ref TestState) : IO Unit := do
     let spec := HIR.eval x y [] deepStackHIR
     match ← Arm64.compileAndRunNative deepStackHIR x y with
     | .ok hw =>
-      assertCond st s!"deepStackHIR({x}, {y}) multi-slot [sp, #16*k] + cbz: native ({hw}) == spec ({spec})"
+      assertCond st s!"deepStackHIR({x}, {y}) register-promoted x4..x7 + cbz: native ({hw}) == spec ({spec})"
         (hw == spec)
     | .error err =>
-      IO.eprintln s!"    clang error: {err}"
+      IO.eprintln s!"    native error: {err}"
       assertCond st s!"deepStackHIR({x}, {y}) native execution" false
+
+  -- Kernel 4 (Open Problem H): Zero-spill register promotion audit (`LIR.countStackOps == 0`)
+  let zeroSpillOk :=
+    LIR.countStackOps (LIR.lowerFromMIR (MIR.lowerFromHIR (HIR.opt collatzStepHIR))) == 0 &&
+    LIR.countStackOps (LIR.lowerFromMIR (MIR.lowerFromHIR (HIR.opt mix64HIR))) == 0 &&
+    LIR.countStackOps (LIR.lowerFromMIR (MIR.lowerFromHIR (HIR.opt collatzOrbit111HIR))) == 0 &&
+    LIR.countStackOps (LIR.lowerFromMIR (MIR.lowerFromHIR (HIR.opt iteratedMix64LoopHIR))) == 0
+  assertCond st "Register promotion (x4..x7 + x8): collatzStep, mix64, collatzOrbit111 & iteratedMix64 emit 0 stack ops!"
+    zeroSpillOk
+
+  -- Kernel 5: 111-step Collatz hardware `cbnz x8` loop (`27 -> 1` in register-only loop!)
+  let orbitSpec := HIR.eval 27 0 [] collatzOrbit111HIR
+  match ← Arm64.compileAndRunNative collatzOrbit111HIR 27 0 with
+  | .ok hwOrbit =>
+    assertCond st s!"collatzOrbit111HIR(27) 111-step hardware cbnz x8 loop: native ({hwOrbit}) == spec ({orbitSpec}) == 1"
+      (hwOrbit == orbitSpec && hwOrbit == 1)
+  | .error err =>
+    IO.eprintln s!"    native error: {err}"
+    assertCond st "collatzOrbit111HIR(27) native execution" false
+
+  -- Kernel 6: 50,000-trip SplitMix64 hardware `cbnz x8` loop (`iteratedMix64LoopHIR`)
+  let loopSeed : UInt64 := 123456789
+  let loopSalt : UInt64 := 0x0FEDCBA987654321
+  let loopSpec := HIR.eval loopSeed loopSalt [] iteratedMix64LoopHIR
+  match ← Arm64.compileAndRunNative iteratedMix64LoopHIR loopSeed loopSalt with
+  | .ok hwLoop =>
+    assertCond st s!"iteratedMix64LoopHIR 50,000-trip zero-spill cbnz loop: native ({hwLoop}) == HIR.eval ({loopSpec})"
+      (hwLoop == loopSpec)
+  | .error err =>
+    IO.eprintln s!"    native error: {err}"
+    assertCond st "iteratedMix64LoopHIR native execution" false
+
+  -- Kernel 7: Nested `repeatLoop` (`7 x 5 = 35` trips, spilling/restoring outer `x8` on `sp`)
+  let nestedSpec := HIR.eval 100 3 [] nestedLoopHIR
+  match ← Arm64.compileAndRunNative nestedLoopHIR 100 3 with
+  | .ok hwNested =>
+    assertCond st s!"nestedLoopHIR(100, 3) outer+inner loop x8 stack save/restore: native ({hwNested}) == 205"
+      (hwNested == nestedSpec && hwNested == 205)
+  | .error err =>
+    IO.eprintln s!"    native error: {err}"
+    assertCond st "nestedLoopHIR native execution" false
+
+  -- Kernel 8: 6-deep simultaneously live `letBind`s crossing `x4..x7` register file into `[sp, #16*k]`!
+  let spill6DeepHIR : HIR :=
+    .letBind (.binOp .add (.param ⟨0, by omega⟩) (.lit 1))
+      (.letBind (.binOp .add (.var 0) (.lit 2))
+        (.letBind (.binOp .add (.var 0) (.lit 3))
+          (.letBind (.binOp .add (.var 0) (.lit 4))
+            (.letBind (.binOp .add (.var 0) (.lit 5))
+              (.letBind (.binOp .add (.var 0) (.lit 6))
+                -- Sum all 6 live bindings (`x4, x5, x6, x7` + 2 stack spill slots) + binary spill!
+                (.binOp .add
+                  (.binOp .add (.var 5) (.var 4))
+                  (.binOp .add
+                    (.binOp .add (.var 3) (.var 2))
+                    (.binOp .add (.var 1) (.var 0)))))))))
+  let spillSpec := HIR.eval 10 0 [] spill6DeepHIR
+  let spillOps := LIR.countStackOps (LIR.lowerFromMIR (MIR.lowerFromHIR (HIR.opt spill6DeepHIR)))
+  match ← Arm64.compileAndRunNative spill6DeepHIR 10 0 with
+  | .ok hwSpill =>
+    assertCond st s!"spill6DeepHIR(10) hybrid x4..x7 + [sp, #16*k] spill (stackOps={spillOps}): native ({hwSpill}) == spec ({spillSpec})"
+      (hwSpill == spillSpec && spillOps > 0)
+  | .error err =>
+    IO.eprintln s!"    native error: {err}"
+    assertCond st "spill6DeepHIR native execution" false
+
+  -- Kernel 9: `HIR.opt` dead-loop elimination (`count = 0`), 1-trip unrolling (`count = 1`), & Linux ELF emitter:
+  let deadLoopOpt := HIR.opt (.repeatLoop 0 (.lit 42) (.binOp .add (.var 0) (.lit 99)))
+  let oneTripOpt := HIR.opt (.repeatLoop 1 (.param ⟨0, by omega⟩) (.binOp .add (.var 0) (.lit 7)))
+  let elfAsm := Arm64.renderLinuxArm64Asm (Arm64.compileFullPipeline collatzOrbit111HIR)
+  let elfChecks :=
+    (elfAsm.splitOn ".type narya_entry, %function").length > 1 &&
+    (elfAsm.splitOn ".note.GNU-stack").length > 1 &&
+    (elfAsm.splitOn "cbnz x8,").length > 1
+  assertCond st "HIR.opt eliminates 0-trip loop, unrolls 1-trip loop, and renders valid Linux ELF AArch64"
+    (deadLoopOpt == .lit 42 &&
+     oneTripOpt == .letBind (.param ⟨0, by omega⟩) (.binOp .add (.var 0) (.lit 7)) &&
+     elfChecks)
 where
   arg1_val : UInt64 := 0x0123456789ABCDEF
 

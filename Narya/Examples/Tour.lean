@@ -166,4 +166,77 @@ theorem tour_mix64_arm64_correct (a0 a1 : UInt64) :
       HIR.eval a0 a1 [] mix64HIR :=
   Arm64.compileFullPipeline_correct mix64HIR a0 a1
 
+/-- 111-iteration Collatz orbit kernel (`collatzOrbit111HIR`):
+    Runs 111 steps of `if acc == 1 then 1 else collatzStep(acc)` inside a single register-promoted
+    `AArch64` hardware `cbnz x8` loop! Starting from `n = 27` (which climbs to `9232`), it reaches `1`. -/
+def collatzOrbit111HIR : HIR :=
+  .repeatLoop 111 (.param ⟨0, by omega⟩)
+    (.ifZero (.binOp .sub (.var 0) (.lit 1))
+      (.lit 1)
+      (.letBind (.binOp .bitAnd (.var 0) (.lit 1))
+        (.ifZero (.var 0)
+          (.binOp .shr (.var 1) (.lit 1))
+          (.binOp .add
+            (.binOp .add (.binOp .mul (.var 1) (.lit 2)) (.var 1))
+            (.lit 1)))))
+
+theorem tour_collatzOrbit111_arm64_correct (n aux : UInt64) :
+    (Arm64.exec (Arm64.compileFullPipeline collatzOrbit111HIR) (Arm64State.initABI n aux)).x0 =
+      HIR.eval n aux [] collatzOrbit111HIR :=
+  Arm64.compileFullPipeline_correct collatzOrbit111HIR n aux
+
+/-- **Zero-Spill Register Promotion Certificate (`0` `str`/`ldr` stack ops!)**:
+    All variables and binary temporaries in `collatzOrbit111HIR` stay in `x4..x7` + `x8`! -/
+theorem tour_collatzOrbit111_zero_stack_ops :
+    LIR.countStackOps (LIR.lowerFromMIR (MIR.lowerFromHIR (HIR.opt collatzOrbit111HIR))) = 0 := by
+  decide
+
+set_option maxRecDepth 8192 in
+/-- **Kernel Theorem (`0 sorry`)**: Running the emitted `AArch64` machine code for `collatzOrbit111HIR`
+    on `n = 27` returns `1` in register `x0` (proved by rewriting along `Arm64.compileFullPipeline_correct`)! -/
+theorem tour_collatzOrbit111_27_reaches_one :
+    (Arm64.exec (Arm64.compileFullPipeline collatzOrbit111HIR) (Arm64State.initABI 27 0)).x0 = 1 := by
+  rw [Arm64.compileFullPipeline_correct]
+  decide
+
+/-- 50,000-iteration SplitMix64 hardware loop (`iteratedMix64LoopHIR`):
+    Scoped live-ranges reuse `x5..x6` while keeping the accumulator in `x4` and loop counter in `x8`,
+    executing all 50,000 non-linear 64-bit mixing steps inside a single native `AArch64` `cbnz x8`
+    loop with **zero stack memory traffic** and **zero C call overhead**! -/
+def iteratedMix64LoopHIR : HIR :=
+  .repeatLoop 50000 (.param ⟨0, by omega⟩)
+    (.letBind
+      (.letBind
+        (.letBind (.binOp .add (.var 0) (.lit 0x9E3779B97F4A7C15))
+          (.binOp .bitXor (.var 0) (.binOp .shr (.var 0) (.lit 30))))
+        (.binOp .mul (.var 0) (.lit 0xBF58476D1CE4E5B9)))
+      (.binOp .bitXor (.var 0) (.param ⟨1, by omega⟩)))
+
+theorem tour_iteratedMix64_arm64_correct (seed salt : UInt64) :
+    (Arm64.exec (Arm64.compileFullPipeline iteratedMix64LoopHIR) (Arm64State.initABI seed salt)).x0 =
+      HIR.eval seed salt [] iteratedMix64LoopHIR :=
+  Arm64.compileFullPipeline_correct iteratedMix64LoopHIR seed salt
+
+theorem tour_iteratedMix64_zero_stack_ops :
+    LIR.countStackOps (LIR.lowerFromMIR (MIR.lowerFromHIR (HIR.opt iteratedMix64LoopHIR))) = 0 := by
+  decide
+
+/-- Nested hardware `repeatLoop` kernel (`nestedLoopHIR`):
+    Outer loop (`7` trips) wrapping an inner loop (`5` trips, total `35` additions of `arg1` to `arg0`),
+    exercising automatic stack save/restore of outer hardware loop counter `x8`! -/
+def nestedLoopHIR : HIR :=
+  .repeatLoop 7 (.param ⟨0, by omega⟩)
+    (.repeatLoop 5 (.var 0)
+      (.binOp .add (.var 0) (.param ⟨1, by omega⟩)))
+
+theorem tour_nestedLoop_arm64_correct (a0 a1 : UInt64) :
+    (Arm64.exec (Arm64.compileFullPipeline nestedLoopHIR) (Arm64State.initABI a0 a1)).x0 =
+      HIR.eval a0 a1 [] nestedLoopHIR :=
+  Arm64.compileFullPipeline_correct nestedLoopHIR a0 a1
+
+theorem tour_nestedLoop_sample :
+    (Arm64.exec (Arm64.compileFullPipeline nestedLoopHIR) (Arm64State.initABI 100 3)).x0 = 205 := by
+  rw [Arm64.compileFullPipeline_correct]
+  decide
+
 end Narya.Examples
