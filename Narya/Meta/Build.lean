@@ -264,7 +264,13 @@ def buildPackage (pkgDir : FilePath) (forceRebuild : Bool := false) :
     let mut emittedBins : List FilePath := []
     let mut sharedEnv := GlobalEnv.withStdPrelude baseTheory
     let mut sharedSyn := SyntaxEnv.standard
+    let mut accumDigests : List (String × DefDigest) := []
     let digestsFile := cacheDir / "unison.digests"
+
+    let mergeDigests (prev : List (String × DefDigest)) (cur : List (String × DefDigest)) :
+        List (String × DefDigest) :=
+      cur.foldl (init := prev) fun acc (nm, dg) =>
+        if acc.any (fun (k, _) => k == nm) then acc else acc ++ [(nm, dg)]
 
     for (u, modTrace, isUpToDate) in plan do
       let traceFile := cacheDir / s!"{u.name}.trace"
@@ -280,17 +286,23 @@ def buildPackage (pkgDir : FilePath) (forceRebuild : Bool := false) :
           | .ok (G', syn', _) =>
             sharedEnv := G'
             sharedSyn := syn'
+            accumDigests := mergeDigests accumDigests (computeEnvDigests G')
         allLogs := allLogs ++ [s!"[cached] {u.name} (trace={expectedHex})"]
       else
         profRef.modify fun s => { s with counters := { s.counters with cacheMisses := s.counters.cacheMisses + 1 } }
         rebuiltMods := rebuiltMods ++ [u.name]
+        let prevTheory := sharedEnv.theory.name
         let prevCount := sharedEnv.entries.length
         match ← profileAnyScriptWithEnv profRef sharedEnv sharedSyn u.source u.name with
         | .error err => return .error s!"In module '{u.name}': {err}"
         | .ok (G', syn', modLogs) =>
           sharedEnv := G'
           sharedSyn := syn'
-          let newEntries := G'.entries.take (G'.entries.length - prevCount)
+          accumDigests := mergeDigests accumDigests (computeEnvDigests G')
+          let addedCount :=
+            if G'.theory.name == prevTheory then G'.entries.length - prevCount
+            else G'.entries.length - 4
+          let newEntries := G'.entries.take addedCount
           for e in newEntries do
             match e with
             | .defn dName _ .kinetic _ body =>
@@ -306,9 +318,8 @@ def buildPackage (pkgDir : FilePath) (forceRebuild : Bool := false) :
 
     let defDigests ←
       if anyStale then do
-        let ds := computeEnvDigests sharedEnv
-        IO.FS.writeFile digestsFile (serializeDigestsCache ds)
-        pure ds
+        IO.FS.writeFile digestsFile (serializeDigestsCache accumDigests)
+        pure accumDigests
       else if ← digestsFile.pathExists then do
         let raw ← IO.FS.readFile digestsFile
         pure (parseDigestsCache raw)

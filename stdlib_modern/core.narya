@@ -1,0 +1,19 @@
+-- stdlib_modern/core.narya — Foundational HoTT combinators, coinductive streams & hole synthesis
+
+def idTy (A : Type) (x : A) : A :=
+  x
+
+def constBool (a : Bool) (b : Bool) : Bool :=
+  a
+
+-- Guarded coinductive stream of 64-bit hardware words (`Energy.potential` + productivity check)
+codef StreamU64 : Type :=
+  sig { head : U64, tail : StreamU64 }
+
+codef ones : StreamU64 :=
+  { head := 1u64, tail := ones }
+
+#check ones.tail.head
+
+-- Interactive Miller pattern hole synthesis (`?0 := true`)
+#solve 0 idTy Bool ? = true

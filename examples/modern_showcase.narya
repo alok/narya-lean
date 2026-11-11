@@ -1,0 +1,55 @@
+/-
+  examples/modern_showcase.narya — Zero-Lisp Extensible Lean/Idris2/Granule Syntax Showcase
+
+  Demonstrates:
+  1. Dynamic in-file Lean-style `prefix`, `infixl`, `infixr`, and leading/trailing `notation` rules!
+  2. Observational HoTT (`Glue`, `trr`, `funext`, `hap`, groupoid `sym`/`trans`) with zero Lisp parens.
+  3. Coinductive negative records (`sig { ... }`, `{ ... }`, tight postfix `.tail.head`).
+  4. Quantitative/Graded Modalities (`□[μ] A`, `box[μ] e`, `(0 g : A)`, `(1 x : A)`, `(ω x : A)`, `f @[μ] x`).
+-/
+
+theory pure_hott
+
+-- 1. Extend Narya's grammar on the fly (Lean 4 Pratt + Mixfix engine):
+notation 50 a " ≡[" A "] " b => Id A a b
+prefix 85 "~!" => sym
+infixr 62 "<+>" => trans
+notation 92 "⟪" x "," y "⟫" => { fst := x, snd := y }
+
+def idBool (b : Bool) : Bool := b
+
+def pRefl (b : Bool) : idBool b ≡[Bool] b :=
+  refl b
+
+def pRoundtrip (b : Bool) : b ≡[Bool] b :=
+  (~! (pRefl b)) <+> (pRefl b)
+
+#eval pRoundtrip true
+
+-- 2. Leading bracket notation `⟪x, y⟫` + postfix record projections `.fst` / `.snd`:
+def PairU64 : Type :=
+  sig { fst : U64, snd : U64 }
+
+def samplePair : PairU64 :=
+  ⟪20u64 + 1u64, 2u64 * 10u64 + 1u64⟫
+
+def sumPair (p : PairU64) : U64 :=
+  let a : U64 := p.fst
+  let b : U64 := p.snd
+  a + b
+
+#eval sumPair samplePair
+
+-- 3. Switch to Benton LNL (`linear_adjoint`) and use Idris 2 QTT (`0`, `1`, `ω`) + Granule `□[F.G]` boxes!
+theory linear_adjoint
+
+infixl 68 "⊕" => u64_add
+
+def linAffineKernel (0 ghostSpec : U64) (1 resource : U64) : U64 :=
+  resource ⊕ 100u64
+
+def boxPromoted : □[F.G] U64 :=
+  box[F.G] 42u64
+
+#check boxPromoted
+#eval linAffineKernel @[Ghost0] 999u64 23u64

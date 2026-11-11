@@ -1,0 +1,24 @@
+-- stdlib_modern/univalence.narya — Extensible mixfix equality, `funext`/`hap`, `Glue` & transport
+
+import core
+
+-- Lean-style user-extensible mixfix notation exported across `import univalence`!
+notation 50 a " ≡[" A "] " b => Id A a b
+
+def idBoolFromCore : Bool -> Bool :=
+  idTy Bool
+
+def reflTrue : idBoolFromCore true ≡[Bool] true :=
+  refl true
+
+-- Higher-dimensional observational function extensionality (`funext` + `hap`)
+def extIdBool : idBoolFromCore ≡[Bool -> Bool] (fun b => b) :=
+  funext b => hap (refl idBoolFromCore) b0 b1 b2
+
+-- Univalence `Glue` line on `Bool` and computational `arrow_line` transport
+axiom notEquiv : Bool -> Bool -> Type
+
+def uaBool : Bool ≡[Type] Bool :=
+  Glue Bool Bool notEquiv
+
+#eval trr (arrow_line (refl Bool) (refl Bool)) idBoolFromCore

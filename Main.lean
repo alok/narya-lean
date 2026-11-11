@@ -209,7 +209,7 @@ def cmdProfile (args : List String) : IO UInt32 := do
     | .error err =>
       IO.eprintln s!"[profile error] {err}"
       return 1
-    | .ok (_, logs) =>
+    | .ok (_, _, logs) =>
       for l in logs do
         IO.println l
       IO.println ""

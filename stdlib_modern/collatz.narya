@@ -1,0 +1,24 @@
+-- stdlib_modern/collatz.narya — Proof-Carrying 64-Bit Kernels Erased to Native ARMv8-A (`ThinEmitter`)
+
+import univalence
+
+axiom arg0 : U64
+axiom arg1 : U64
+
+-- Binds `uaBool` and `extIdBool` (typed using imported `≡[...]` mixfix notation!) in layout-sensitive
+-- `let` blocks; `ErasableCore` erases both HoTT proofs to zero instructions and `ThinEmitter` emits
+-- identical raw ARMv8-A machine words as `stdlib/collatz.ny`!
+def collatz111 : U64 :=
+  let p1 : Bool ≡[Type] Bool := uaBool
+  let p2 : idBoolFromCore ≡[Bool -> Bool] (fun b => b) := extIdBool
+  repeat 111 from arg0 with n =>
+    ifz n & 1u64 then
+      n >> 1u64
+    else
+      n * 3u64 + 1u64
+
+-- 64-bit SplitMix64 hash avalancher (`0xBF58476D1CE4E5B9` = 13787848793156543929u64)
+def splitmix64 : U64 :=
+  let mixed : U64 := arg0 ^ arg1
+  let m1 : U64 := (mixed ^ (mixed >> 30u64)) * 13787848793156543929u64
+  m1 ^ (m1 >> 31u64)

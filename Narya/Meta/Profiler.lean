@@ -347,7 +347,10 @@ def profileModernScriptWithEnv (prof : IO.Ref ProfileState) (G0 : GlobalEnv)
     match runRes with
     | .error e => return .error e
     | .ok (G', syn', baseLogs) =>
-      let newEntries := (G'.entries.take (G'.entries.length - prevCount)).reverse
+      let addedCount :=
+        if G'.theory.name == G0.theory.name then G'.entries.length - prevCount
+        else G'.entries.length - 4
+      let newEntries := (G'.entries.take addedCount).reverse
       let mut arena := TermArena.empty 256
       let mut logs := baseLogs
       for entry in newEntries do
