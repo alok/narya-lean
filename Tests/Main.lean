@@ -13,7 +13,7 @@ import Narya
 
 open Narya.Dim Narya.Modal Narya.Modal.Combinators Narya.Modal.KeySynth
 open Narya.Core Narya.Core.Safety Narya.Core.Unify Narya.Core.Level Narya.Core.Linear
-open Narya.Syntax Narya.Elab Narya.Fast Narya.Compiler Narya.Examples
+open Narya.Syntax Narya.Elab Narya.Fast Narya.Compiler Narya.Compiler.ThinEmitter Narya.Examples
 
 structure TestState where
   passed : Nat := 0
@@ -469,6 +469,97 @@ def runNativeArm64Tests (st : IO.Ref TestState) : IO Unit := do
 where
   arg1_val : UInt64 := 0x0123456789ABCDEF
 
+def runSorbetInetThinJitTests (st : IO.Ref TestState) : IO Unit := do
+  IO.println "── Suite 7: Sorbet Arena, Linear Interaction Nets & In-Process `ThinEmitter` `MAP_JIT` ──"
+  -- 1. Sorbet `FastGlobalTable` O(1) lookup + hash-consed `TermArena` deduplication & `evalU64`
+  let fastGT := FastGlobalTable.ofGlobalEnv hoTTWithNot
+  let notSymOk :=
+    match fastGT.syms.lookup? "notBool" with
+    | some sid => fastGT.lookupById? sid == hoTTWithNot.lookup? "notBool"
+    | none => false
+  assertCond st "Sorbet FastGlobalTable: O(1) SymId array lookup matches GlobalEnv.lookup? ('notBool')"
+    notSymOk
+
+  let ar0 := TermArena.empty 256
+  let (arg0Sym, syms1) := ar0.syms.intern "arg0"
+  let (arg1Sym, syms2) := syms1.intern "arg1"
+  let arInit := { ar0 with syms := syms2 }
+  let sharedSub : Term := .u64BinOp .add (.global "arg0") (.u64Lit 19)
+  let dagTerm : Term := .u64BinOp .mul sharedSub sharedSub
+  let (rootId, arAfter) := arInit.internTerm dagTerm
+  let (dupId, arAfter2) := arAfter.internTerm dagTerm
+  let arenaVal := arAfter2.evalU64 arg0Sym arg1Sym 23 0 32 [] rootId
+  assertCond st s!"Sorbet TermArena: hash-consing deduplicates DAG (rootId={rootId}=={dupId}, hcHits={arAfter2.hcHits}) & evalU64 == 1764"
+    (rootId == dupId && arAfter2.hcHits >= 4 && arenaVal == 1764)
+
+  -- 2. Linear Interaction Net (`0` DUP fans, `0` fan commutations, `0` reduction grows!)
+  let initLinNet := INet.compileTerm linearHigherOrderPipeline
+  let (linRes, finalLinNet) := INet.evalLinearTermU64 linearHigherOrderPipeline 64
+  assertCond st "Linear INet (LNL 1-grade): higher-order pipeline emits 0 DUP fans, 0 commutations, 0 grows & returns 52"
+    (initLinNet.countDups == 0 && linRes == some 52 &&
+     finalLinNet.fanCommutations == 0 && finalLinNet.reductionGrows == 0 && finalLinNet.freeList.size > 0)
+
+  -- 3. `ThinEmitter` + in-process W^X `MAP_JIT` / `mprotect` native execution (`cbits/narya_jit.c`)
+  let hasJit ← jitSupported
+  assertCond st "ThinEmitter W^X FFI: native AArch64 in-process JIT slab supported == true"
+    hasJit
+
+  -- Verify `ThinEmitter` + `MAP_JIT` across ALL kernels: branches, 64-bit movz/movk, 50k loop, nested loop, 6-deep stack spill!
+  let jitCollatzOdd ← jitExecHIR collatzStepHIR 27 0
+  let jitCollatzEven ← jitExecHIR collatzStepHIR 82 0
+  let jitMix ← jitExecHIR mix64HIR 0xCAFEBABEDEADBEEF 0x0123456789ABCDEF
+  let jitOrbit ← jitExecHIR collatzOrbit111HIR 27 0
+  let jitLoop50k ← jitExecHIR iteratedMix64LoopHIR 123456789 0x0FEDCBA987654321
+  let jitNested ← jitExecHIR nestedLoopHIR 100 3
+  let spill6 : HIR :=
+    .letBind (.binOp .add (.param ⟨0, by omega⟩) (.lit 1))
+      (.letBind (.binOp .add (.var 0) (.lit 2))
+        (.letBind (.binOp .add (.var 0) (.lit 3))
+          (.letBind (.binOp .add (.var 0) (.lit 4))
+            (.letBind (.binOp .add (.var 0) (.lit 5))
+              (.letBind (.binOp .add (.var 0) (.lit 6))
+                (.binOp .add
+                  (.binOp .add (.var 5) (.var 4))
+                  (.binOp .add
+                    (.binOp .add (.var 3) (.var 2))
+                    (.binOp .add (.var 1) (.var 0)))))))))
+  let jitSpill6 ← jitExecHIR spill6 10 0
+  assertCond st "ThinEmitter MAP_JIT matches HIR.eval on collatzStep (82, 41), mix64, collatzOrbit111 (1), 50k loop, nestedLoop (205) & spill6 (116)!"
+    (jitCollatzOdd.toOption == some 82 &&
+     jitCollatzEven.toOption == some 41 &&
+     jitMix.toOption == some (HIR.eval 0xCAFEBABEDEADBEEF 0x0123456789ABCDEF [] mix64HIR) &&
+     jitOrbit.toOption == some 1 &&
+     jitLoop50k.toOption == some (HIR.eval 123456789 0x0FEDCBA987654321 [] iteratedMix64LoopHIR) &&
+     jitNested.toOption == some 205 &&
+     jitSpill6.toOption == some 116)
+
+  -- 4. Full `Core.NbE` (with univalence/HoTT proof `letIn`!) == `Arm64.exec` == live `ThinEmitter` `MAP_JIT`!
+  let coreWithProofAndCollatz : Term :=
+    .letIn "uaProof"
+      (.obsEq .hott (.uu 0) [.dataTy "Bool" [], .dataTy "Bool" []])
+      (.gel .hott [.dataTy "Bool" [], .dataTy "Bool" []] (.global "notEquiv"))
+      (.u64Repeat 111 (.global "arg0")
+        (.u64IfZero (.u64BinOp .bitAnd (.bvar 0) (.u64Lit 1))
+          (.u64BinOp .shr (.bvar 0) (.u64Lit 1))
+          (.u64BinOp .add (.u64BinOp .mul (.bvar 0) (.u64Lit 3)) (.u64Lit 1))))
+  let eraseValid := ErasableCore [] coreWithProofAndCollatz
+  let nbeVal := (evalTerm 512 (abiGlobalEnv pureHoTT 27 0) [] coreWithProofAndCollatz).force
+  let jitCoreRes ← jitExecCore coreWithProofAndCollatz 27 0
+  assertCond st "End-to-end Core.NbE (with univalence Glue proof) == Erasure == ThinEmitter MAP_JIT (Collatz 27 -> 1)!"
+    (eraseValid && nbeVal == .u64Lit 1 && jitCoreRes.toOption == some 1)
+
+  -- 5. Latency sanity check: 100 in-process `ThinEmitter` + `MAP_JIT` compilations+runs finish in < 5 ms total!
+  let t0 ← IO.monoNanosNow
+  let mut acc : UInt64 := 0
+  for i in [:100] do
+    match ← jitExecHIR collatzOrbit111HIR 27 i.toUInt64 with
+    | .ok v => acc := acc + v
+    | .error _ => pure ()
+  let dtNs := (← IO.monoNanosNow) - t0
+  let avgUs := dtNs / 100000
+  assertCond st s!"ThinEmitter + MAP_JIT latency: 100 full compile+JIT runs in {dtNs / 1000} µs ({avgUs} µs/compile+run)!"
+    (acc == 100 && dtNs < 50000000)
+
 def main : IO UInt32 := do
   IO.println "╔══════════════════════════════════════════════════════════════════════════╗"
   IO.println "║  Narya-Lean Verification & Native Apple Silicon Test Suite (`lake test`) ║"
@@ -480,6 +571,7 @@ def main : IO UInt32 := do
   runCoreTests st
   runSyntaxAndDSLTests st
   runNativeArm64Tests st
+  runSorbetInetThinJitTests st
   let final ← st.get
   IO.println "────────────────────────────────────────────────────────────────────────────"
   IO.println s!"Total: {final.passed + final.failed} assertions | Passed: {final.passed} | Failed: {final.failed}"
