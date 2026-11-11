@@ -15,6 +15,7 @@
      `.arm64.bin` machine-code binaries — achieving `< 1 ms` `[cached]` no-op rebuilds and selective
      downstream invalidation!
 -/
+import Narya.Meta.ContentHash
 import Narya.Meta.Profiler
 
 namespace Narya.Meta
@@ -120,11 +121,15 @@ def resolveModuleDAG (pkgDir : FilePath) (roots : List String) :
     | mName :: restQ =>
       queue := restQ
       if !(loaded.any (fun (k, _) => k == mName)) then
-        let mPath := pkgDir / s!"{mName}.ny"
-        if !(← mPath.pathExists) then
-          return .error s!"Missing imported module file: {mPath}"
+        let modernPath := pkgDir / s!"{mName}.narya"
+        let legacyPath := pkgDir / s!"{mName}.ny"
+        let hasModern ← modernPath.pathExists
+        let hasLegacy ← legacyPath.pathExists
+        if !hasModern && !hasLegacy then
+          return .error s!"Missing imported module file: {modernPath} (or {legacyPath})"
+        let mPath := if hasModern then modernPath else legacyPath
         let src ← IO.FS.readFile mPath
-        match extractImports src with
+        match extractAnyImports src with
         | .error e => return .error s!"In {mPath}: {e}"
         | .ok deps =>
           let unit : ModuleUnit := { name := mName, path := mPath, source := src, imports := deps }
@@ -180,10 +185,31 @@ structure BuildResult where
   rebuiltMods  : List String
   logs         : List String
   emittedBins  : List FilePath
+  defDigests   : List (String × DefDigest) := []
   profile      : ProfileState
   deriving Repr
 
-/-- Build a Narya package directory (`narya.toml` + `.ny` modules) incrementally into `<pkgDir>/.narya/build/`! -/
+private def serializeDigestsCache (ds : List (String × DefDigest)) : String :=
+  let lines := ds.map fun (name, d) =>
+    let abiPart := match d.abiHash with | some h => toString h.toNat | none => "none"
+    s!"{name}\t{d.kind}\t{d.specHash.toNat}\t{d.implHash.toNat}\t{abiPart}"
+  String.intercalate "\n" lines ++ "\n"
+
+private def parseDigestsCache (raw : String) : List (String × DefDigest) :=
+  (raw.splitOn "\n").filterMap fun line =>
+    let t := line.trimAscii.toString
+    if t.isEmpty then none
+    else
+      match t.splitOn "\t" with
+      | [name, kind, specS, implS, abiS] =>
+        match specS.toNat?, implS.toNat? with
+        | some sN, some iN =>
+          let abiOpt := if abiS == "none" then none else abiS.toNat?.map UInt64.ofNat
+          some (name, { kind, specHash := sN.toUInt64, implHash := iN.toUInt64, abiHash := abiOpt })
+        | _, _ => none
+      | _ => none
+
+/-- Build a Narya package directory (`narya.toml` + `.narya`/`.ny` modules) incrementally into `<pkgDir>/.narya/build/`! -/
 def buildPackage (pkgDir : FilePath) (forceRebuild : Bool := false) :
     IO (Except String BuildResult) := do
   let tomlPath := pkgDir / "narya.toml"
@@ -231,12 +257,14 @@ def buildPackage (pkgDir : FilePath) (forceRebuild : Bool := false) :
 
     let anyStale := plan.any (fun (_, _, ok) => !ok)
 
-    -- Pass 2: Execute only stale modules (and hydrate `sharedEnv` only when a downstream module is stale!)
+    -- Pass 2: Execute only stale modules (and hydrate `sharedEnv` + `sharedSyn` when any module is stale!)
     let mut cachedMods : List String := []
     let mut rebuiltMods : List String := []
     let mut allLogs : List String := []
     let mut emittedBins : List FilePath := []
     let mut sharedEnv := GlobalEnv.withStdPrelude baseTheory
+    let mut sharedSyn := SyntaxEnv.standard
+    let digestsFile := cacheDir / "unison.digests"
 
     for (u, modTrace, isUpToDate) in plan do
       let traceFile := cacheDir / s!"{u.name}.trace"
@@ -246,19 +274,22 @@ def buildPackage (pkgDir : FilePath) (forceRebuild : Bool := false) :
         profRef.modify fun s => { s with counters := { s.counters with cacheHits := s.counters.cacheHits + 1 } }
         cachedMods := cachedMods ++ [u.name]
         if anyStale then
-          -- Hydrate `sharedEnv` so stale downstream dependents can reference `u`'s declarations
-          match runScriptWithEnv sharedEnv u.source with
+          -- Hydrate `sharedEnv` + `sharedSyn` so stale downstream dependents inherit declarations & notations!
+          match runAnyScriptWithEnv sharedEnv sharedSyn u.source with
           | .error err => return .error s!"In cached module '{u.name}': {err}"
-          | .ok (G', _) => sharedEnv := G'
+          | .ok (G', syn', _) =>
+            sharedEnv := G'
+            sharedSyn := syn'
         allLogs := allLogs ++ [s!"[cached] {u.name} (trace={expectedHex})"]
       else
         profRef.modify fun s => { s with counters := { s.counters with cacheMisses := s.counters.cacheMisses + 1 } }
         rebuiltMods := rebuiltMods ++ [u.name]
         let prevCount := sharedEnv.entries.length
-        match ← profileScriptWithEnv profRef sharedEnv u.source u.name with
+        match ← profileAnyScriptWithEnv profRef sharedEnv sharedSyn u.source u.name with
         | .error err => return .error s!"In module '{u.name}': {err}"
-        | .ok (G', modLogs) =>
+        | .ok (G', syn', modLogs) =>
           sharedEnv := G'
+          sharedSyn := syn'
           let newEntries := G'.entries.take (G'.entries.length - prevCount)
           for e in newEntries do
             match e with
@@ -273,6 +304,16 @@ def buildPackage (pkgDir : FilePath) (forceRebuild : Bool := false) :
           IO.FS.writeFile traceFile (expectedHex ++ "\n")
           allLogs := allLogs ++ [s!"[built]  {u.name} (trace={expectedHex})"] ++ modLogs
 
+    let defDigests ←
+      if anyStale then do
+        let ds := computeEnvDigests sharedEnv
+        IO.FS.writeFile digestsFile (serializeDigestsCache ds)
+        pure ds
+      else if ← digestsFile.pathExists then do
+        let raw ← IO.FS.readFile digestsFile
+        pure (parseDigestsCache raw)
+      else pure []
+
     let finalProf ← profRef.get
     return .ok {
       packageName := cfg.name
@@ -281,6 +322,7 @@ def buildPackage (pkgDir : FilePath) (forceRebuild : Bool := false) :
       rebuiltMods := rebuiltMods
       logs        := allLogs
       emittedBins := emittedBins
+      defDigests  := defDigests
       profile     := finalProf
     }
 

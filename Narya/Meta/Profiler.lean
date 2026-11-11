@@ -14,6 +14,7 @@
      - Brendan Gregg collapsed stack Flamegraph `.folded` (`exportFoldedFlamegraph`)
 -/
 import Narya.Syntax.Parser
+import Narya.Syntax.Modern
 import Narya.Fast.Arena
 import Narya.Fast.InteractionNet
 import Narya.Compiler.ThinEmitter
@@ -330,5 +331,63 @@ def profileScriptWithEnv (prof : IO.Ref ProfileState) (G0 : GlobalEnv) (script :
 
         | other => return .error s!"Unrecognized top-level command: {reprStr other}"
       return .ok (G, logs)
+
+/-- Execute a Zero-Lisp `.narya` script with phase telemetry, `SyntaxEnv` threading,
+    Sorbet `TermArena` interning, and automatic `ThinEmitter` + `MAP_JIT` compilation! -/
+def profileModernScriptWithEnv (prof : IO.Ref ProfileState) (G0 : GlobalEnv)
+    (syn0 : SyntaxEnv := SyntaxEnv.standard) (script : String)
+    (modLabel : String := "<script>") :
+    IO (Except String (GlobalEnv × SyntaxEnv × List String)) := do
+  ProfileState.withSpan prof "module" modLabel do
+    let _toks ← ProfileState.withSpanPure prof "parse" modLabel fun () =>
+      tokenizeModern script
+    let prevCount := G0.entries.length
+    let runRes ← ProfileState.withSpanPure prof "typecheck" modLabel fun () =>
+      runModernScriptWithEnv G0 syn0 script
+    match runRes with
+    | .error e => return .error e
+    | .ok (G', syn', baseLogs) =>
+      let newEntries := (G'.entries.take (G'.entries.length - prevCount)).reverse
+      let mut arena := TermArena.empty 256
+      let mut logs := baseLogs
+      for entry in newEntries do
+        match entry with
+        | .defn name _ energy ty body =>
+          let arena' ← ProfileState.withSpanPure prof "arena_intern" name fun () =>
+            let (_, a1) := arena.internTerm ty
+            let (_, a2) := a1.internTerm body
+            a2
+          let addedNodes := arena'.nodes.size - arena.nodes.size
+          let addedHits := arena'.hcHits - arena.hcHits
+          arena := arena'
+          prof.modify fun s =>
+            { s with counters := { s.counters with
+                arenaNodes := s.counters.arenaNodes + addedNodes
+                arenaHcHits := s.counters.arenaHcHits + addedHits } }
+          if energy == .kinetic && ErasableCore [] body then
+            let code ← ProfileState.withSpanPure prof "thin_emit" name fun () =>
+              thinCompileCore body
+            prof.modify fun s =>
+              { s with counters := { s.counters with thinEmitBytes := s.counters.thinEmitBytes + code.size } }
+            if (← jitSupported) then
+              let jitVal ← ProfileState.withSpan prof "jit_exec" name do
+                jitRunU64 code 27 0
+              prof.modify fun s =>
+                { s with counters := { s.counters with jitRuns := s.counters.jitRuns + 1 } }
+              logs := logs ++ [s!"[jit] {name}(27, 0) => {jitVal} ({code.size} ARM64 bytes)"]
+        | _ => pure ()
+      return .ok (G', syn', logs)
+
+/-- Unified instrumented runner auto-detecting `.narya` vs legacy `.ny` syntax! -/
+def profileAnyScriptWithEnv (prof : IO.Ref ProfileState) (G0 : GlobalEnv)
+    (syn0 : SyntaxEnv := SyntaxEnv.standard) (script : String)
+    (modLabel : String := "<script>") :
+    IO (Except String (GlobalEnv × SyntaxEnv × List String)) := do
+  if isModernSource script then
+    profileModernScriptWithEnv prof G0 syn0 script modLabel
+  else
+    match ← profileScriptWithEnv prof G0 script modLabel with
+    | .error e => return .error e
+    | .ok (G1, logs) => return .ok (G1, syn0, logs)
 
 end Narya.Meta
