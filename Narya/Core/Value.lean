@@ -29,9 +29,14 @@ inductive Head where
 
 mutual
 
-/-- First-order semantic closure. -/
+/-- First-order semantic closure (strictly positive, covering lexical lambdas and
+    HOTT contravariant-covariant `Π`-transport functions). -/
 inductive Closure where
   | mk (env : List Val) (body : Term)
+  | arrowTrr (g : Dir) (mod : ModPath) (domLine : Val) (codLine : Val) (f₀ : Val)
+  | arrowTrl (g : Dir) (mod : ModPath) (domLine : Val) (codLine : Val) (f₁ : Val)
+  | piTrr (g : Dir) (mod : ModPath) (domLine : Val) (env : List Val) (codLine : Term) (f₀ : Val)
+  | piTrl (g : Dir) (mod : ModPath) (domLine : Val) (env : List Val) (codLine : Term) (f₁ : Val)
   deriving BEq, Repr
 
 /-- Semantic elimination frame (stored in reverse-application order on `rspine` for $O(1)$ push). -/
@@ -82,12 +87,28 @@ inductive Val where
   | obsHet (g : Dir) (tyBridge : Val) (ends : List Val)
   /-- Reflexivity / degeneracy bridge `refl_g v`. -/
   | refl (g : Dir) (tm : Val)
+  /-- Composite fibrant path `trans g p q` (when neither `p` nor `q` is `refl`). -/
+  | trans (g : Dir) (p : Val) (q : Val)
   /-- Relational Gel/Glue bridge-of-types `Gel_g types rel`. -/
   | gel (g : Dir) (types : List Val) (rel : Val)
   /-- Canonical bridge inside a `Gel` type: `gelIntro_g ends wit`. -/
   | gelIntro (g : Dir) (ends : List Val) (wit : Val)
-  /-- Canonical fibrant path lift `liftr g tyLine x₀`. -/
+  /-- Canonical non-dependent modal function-type bridge. -/
+  | arrowLine (g : Dir) (mod : ModPath) (domLine : Val) (codLine : Val)
+  /-- Canonical dependent modal Π-type bridge. -/
+  | piLine (g : Dir) (name : String) (mod : ModPath) (domLine : Val)
+      (env : List Val) (cod0 cod1 codLine : Term)
+  /-- Canonical binary product record bridge. -/
+  | prodLine (g : Dir) (fstName sndName : String) (fstLine : Val) (sndLine : Val)
+  /-- Canonical dependent modal Σ/record bridge. -/
+  | sigLine (g : Dir) (fstName sndName : String) (fstMod sndMod : ModPath)
+      (fstLine : Val) (env : List Val) (snd0 snd1 sndLine : Term)
+  /-- Canonical positive modal box type bridge. -/
+  | boxLine (g : Dir) (mod : ModPath) (innerLine : Val)
+  /-- Canonical fibrant forward path lift `liftr g tyLine x₀`. -/
   | liftr (g : Dir) (tyLine : Val) (x₀ : Val)
+  /-- Canonical fibrant backward path lift `liftl g tyLine x₁`. -/
+  | liftl (g : Dir) (tyLine : Val) (x₁ : Val)
   deriving BEq, Repr
 
 end

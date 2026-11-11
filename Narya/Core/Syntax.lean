@@ -97,8 +97,26 @@ inductive Term where
   | trr (g : Dir) (tyLine : Term) (x₀ : Term)
   /-- Fibrant backward transport `trl g tyLine x₁` (requires `g.isFibrant = true`). -/
   | trl (g : Dir) (tyLine : Term) (x₁ : Term)
-  /-- Fibrant path lift `liftr g tyLine x₀ : ObsHet g tyLine [x₀, trr g tyLine x₀]`. -/
+  /-- Fibrant forward path lift `liftr g tyLine x₀ : ObsHet g tyLine [x₀, trr g tyLine x₀]`. -/
   | liftr (g : Dir) (tyLine : Term) (x₀ : Term)
+  /-- Fibrant backward path lift `liftl g tyLine x₁ : ObsHet g tyLine [trl g tyLine x₁, x₁]`. -/
+  | liftl (g : Dir) (tyLine : Term) (x₁ : Term)
+  /-- Fibrant path composition `trans g p q` (for `calc` chains & groupoid computation). -/
+  | trans (g : Dir) (p : Term) (q : Term)
+  /-- Non-dependent modal function-type bridge `ObsEq g UU [(x : mod | A₀) → B₀, (x : mod | A₁) → B₁]`. -/
+  | arrowLine (g : Dir) (mod : ModPath) (domLine : Term) (codLine : Term)
+  /-- Dependent modal Π-type bridge `ObsEq g UU [(x : mod | A₀) → cod0, (x : mod | A₁) → cod1]`,
+      where `cod0` binds `x₀`, `cod1` binds `x₁`, and `codLine` binds `(x₀, x₁, x_het)`. -/
+  | piLine (g : Dir) (name : String) (mod : ModPath) (domLine : Term)
+      (cod0 : Term) (cod1 : Term) (codLine : Term)
+  /-- Non-dependent binary record/product bridge `ObsEq g UU [sig { f : A₀, s : B₀ }, sig { f : A₁, s : B₁ }]`. -/
+  | prodLine (g : Dir) (fstName sndName : String) (fstLine : Term) (sndLine : Term)
+  /-- Dependent modal Σ/record bridge `ObsEq g UU [sig { (f : m₁ | A₀), (s : m₂ | snd0) }, ...]`,
+      where `snd0` binds `x₀`, `snd1` binds `x₁`, and `sndLine` binds `(x₀, x₁, x_het)`. -/
+  | sigLine (g : Dir) (fstName sndName : String) (fstMod sndMod : ModPath)
+      (fstLine : Term) (snd0 : Term) (snd1 : Term) (sndLine : Term)
+  /-- Positive modal box type bridge `ObsEq g UU [⟨mod | A₀⟩, ⟨mod | A₁⟩]`. -/
+  | boxLine (g : Dir) (mod : ModPath) (innerLine : Term)
   /-- HoTT path induction `J` on fibrant direction `g`. -/
   | pathJ (g : Dir) (ty : Term) (base : Term) (motive : Term)
       (reflCase : Term) (target : Term) (path : Term)

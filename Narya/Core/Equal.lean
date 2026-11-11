@@ -61,11 +61,43 @@ def equalVal (fuel : Nat) (G : GlobalEnv) (depth : Nat) (v₁ v₂ : Val) : Bool
       (g₁ == g₂) && equalVal fuel' G depth tb₁ tb₂ && equalValLists fuel' G depth es₁ es₂
     | .refl g₁ a₁, .refl g₂ a₂ =>
       (g₁ == g₂) && equalVal fuel' G depth a₁ a₂
+    | .trans g₁ p₁ q₁, .trans g₂ p₂ q₂ =>
+      (g₁ == g₂) && equalVal fuel' G depth p₁ p₂ && equalVal fuel' G depth q₁ q₂
     | .gel g₁ ts₁ r₁, .gel g₂ ts₂ r₂ =>
       (g₁ == g₂) && equalValLists fuel' G depth ts₁ ts₂ && equalVal fuel' G depth r₁ r₂
     | .gelIntro g₁ es₁ w₁, .gelIntro g₂ es₂ w₂ =>
       (g₁ == g₂) && equalValLists fuel' G depth es₁ es₂ && equalVal fuel' G depth w₁ w₂
+    | .arrowLine g₁ m₁ d₁ c₁, .arrowLine g₂ m₂ d₂ c₂ =>
+      (g₁ == g₂) && decide (m₁ = m₂) && equalVal fuel' G depth d₁ d₂ && equalVal fuel' G depth c₁ c₂
+    | .piLine g₁ _ m₁ d₁ e₁ c0₁ c1₁ cL₁, .piLine g₂ _ m₂ d₂ e₂ c0₂ c1₂ cL₂ =>
+      let v0 := Val.vvar depth
+      let v1 := Val.vvar (depth + 1)
+      let v2 := Val.vvar (depth + 2)
+      (g₁ == g₂) && decide (m₁ = m₂) &&
+      equalVal fuel' G depth d₁ d₂ &&
+      equalVal fuel' G (depth + 1) (evalTerm fuel' G (v0 :: e₁) c0₁) (evalTerm fuel' G (v0 :: e₂) c0₂) &&
+      equalVal fuel' G (depth + 1) (evalTerm fuel' G (v0 :: e₁) c1₁) (evalTerm fuel' G (v0 :: e₂) c1₂) &&
+      equalVal fuel' G (depth + 3) (evalTerm fuel' G (v2 :: v1 :: v0 :: e₁) cL₁)
+        (evalTerm fuel' G (v2 :: v1 :: v0 :: e₂) cL₂)
+    | .prodLine g₁ f₁ s₁ a₁ b₁, .prodLine g₂ f₂ s₂ a₂ b₂ =>
+      (g₁ == g₂) && strEq f₁ f₂ && strEq s₁ s₂ &&
+      equalVal fuel' G depth a₁ a₂ && equalVal fuel' G depth b₁ b₂
+    | .sigLine g₁ f₁ s₁ fm₁ sm₁ fl₁ e₁ s0₁ s1₁ sL₁, .sigLine g₂ f₂ s₂ fm₂ sm₂ fl₂ e₂ s0₂ s1₂ sL₂ =>
+      let v0 := Val.vvar depth
+      let v1 := Val.vvar (depth + 1)
+      let v2 := Val.vvar (depth + 2)
+      (g₁ == g₂) && strEq f₁ f₂ && strEq s₁ s₂ &&
+      decide (fm₁ = fm₂) && decide (sm₁ = sm₂) &&
+      equalVal fuel' G depth fl₁ fl₂ &&
+      equalVal fuel' G (depth + 1) (evalTerm fuel' G (v0 :: e₁) s0₁) (evalTerm fuel' G (v0 :: e₂) s0₂) &&
+      equalVal fuel' G (depth + 1) (evalTerm fuel' G (v0 :: e₁) s1₁) (evalTerm fuel' G (v0 :: e₂) s1₂) &&
+      equalVal fuel' G (depth + 3) (evalTerm fuel' G (v2 :: v1 :: v0 :: e₁) sL₁)
+        (evalTerm fuel' G (v2 :: v1 :: v0 :: e₂) sL₂)
+    | .boxLine g₁ m₁ in₁, .boxLine g₂ m₂ in₂ =>
+      (g₁ == g₂) && decide (m₁ = m₂) && equalVal fuel' G depth in₁ in₂
     | .liftr g₁ l₁ x₁, .liftr g₂ l₂ x₂ =>
+      (g₁ == g₂) && equalVal fuel' G depth l₁ l₂ && equalVal fuel' G depth x₁ x₂
+    | .liftl g₁ l₁ x₁, .liftl g₂ l₂ x₂ =>
       (g₁ == g₂) && equalVal fuel' G depth l₁ l₂ && equalVal fuel' G depth x₁ x₂
     | _, _ => false
 

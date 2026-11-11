@@ -68,6 +68,22 @@ def uaNotTerm : Term :=
   (narya_hoTT! trr(Glue(Bool, Bool, notEquiv), trl(Glue(Bool, Bool, notEquiv), true))) ==
   .ctor "Bool" "true" [])
 
+-- 5. Full Computational HOTT Fibrancy (`arrowLine`, `prodLine`, `boxLine`, `calc_eq`):
+--    - Transporting `(fun b => true) : Bool → Bool` across `arrowLine(uaNot, uaNot)` and applying
+--      to `true` computes `not (true) = false`!
+--    - Transporting `⟨fst := true, snd := false⟩` across `prodLine(uaNot, uaNot)` computes
+--      `⟨fst := false, snd := true⟩`!
+--    - Equational reasoning `calc_eq(Bool == Bool by uaNot == Bool by <- uaNot)` transports `true ~> true`!
+#guard (normalize hoTTWithNot [] 0
+  (narya_hoTT! (trr(arrowLine(Glue(Bool, Bool, notEquiv), Glue(Bool, Bool, notEquiv)), (fun b => true)) true)) ==
+  .ctor "Bool" "false" [])
+#guard (normalize hoTTWithNot [] 0
+  (narya_hoTT! trr(prodLine(Glue(Bool, Bool, notEquiv), Glue(Bool, Bool, notEquiv)), ⟨fst := true, snd := false⟩)) ==
+  .tuple [("fst", .ctor "Bool" "false" []), ("snd", .ctor "Bool" "true" [])])
+#guard (normalize hoTTWithNot [] 0
+  (narya_hoTT! trr(calc_eq(Bool == Bool by Glue(Bool, Bool, notEquiv) == Bool by <- Glue(Bool, Bool, notEquiv)), true)) ==
+  .ctor "Bool" "true" [])
+
 /-! ### 2. External Parametricity (`-external`) & Locker Universe Discipline -/
 
 def extEnv : GlobalEnv := GlobalEnv.withStdPrelude externalParamTheory

@@ -170,6 +170,44 @@ def runCoreTests (st : IO.Ref TestState) : IO Unit := do
   assertCond st "Displayed Type Theory coinductive SST under Energy.potential typechecks cleanly"
     sstCheckedResult.isOk
 
+  -- 7. Full Computational HOTT Fibrancy (`arrowLine`, `prodLine`, `boxLine`, `liftl`, `calc_eq`):
+  let fnTrNf := normalize hoTTWithNot [] 0
+    (narya_hoTT! (trr(arrowLine(Glue(Bool, Bool, notEquiv), Glue(Bool, Bool, notEquiv)), (fun b => true)) true))
+  assertCond st "HOTT Π-fibrancy: trr(arrowLine(uaNot, uaNot), constTrue) true ~> false"
+    (fnTrNf == .ctor "Bool" "false" [])
+
+  let prodTrNf := normalize hoTTWithNot [] 0
+    (narya_hoTT! trr(prodLine(Glue(Bool, Bool, notEquiv), Glue(Bool, Bool, notEquiv)), ⟨fst := true, snd := false⟩))
+  assertCond st "HOTT Σ-fibrancy: trr(prodLine(uaNot, uaNot), <true, false>) ~> <false, true>"
+    (prodTrNf == .tuple [("fst", .ctor "Bool" "false" []), ("snd", .ctor "Bool" "true" [])])
+
+  let GAdjHoTT : GlobalEnv :=
+    let g0 := GlobalEnv.withStdPrelude adjunctionTheory
+    let dNotBody : Term :=
+      .lam "b" (ModPath.id "D")
+        (.matchData (.bvar 0) (ModPath.id "D") (.dataTy "Bool" [])
+          [("false", 0, .ctor "Bool" "true" []), ("true", 0, .ctor "Bool" "false" [])])
+    let dNotTy : Term := .pi "_" (ModPath.id "D") (.dataTy "Bool" []) (.dataTy "Bool" [])
+    let dEqvTy : Term := .recordTy [("fwd", ModPath.id "D", dNotTy), ("bwd", ModPath.id "D", dNotTy)]
+    let dEqvBd : Term := .tuple [("fwd", .global "notD"), ("bwd", .global "notD")]
+    match addCheckedDef g0 "notD" dNotTy dNotBody .kinetic (some "D") with
+    | .ok g1 => (addCheckedDef g1 "notEquivD" dEqvTy dEqvBd .kinetic (some "D")).toOption.getD g1
+    | .error _ => g0
+  let boxTrTm := narya! [adjunctionTheory]
+    trr(boxLine(L, Glue(Bool, Bool, notEquivD)), box(L, true))
+  let boxTrOk := (synthClosed GAdjHoTT boxTrTm).isOk
+  let boxTrNf := normalize GAdjHoTT [] 0 boxTrTm
+  let lMod := NTerm.resolveModTotal adjunctionTheory "C" "L"
+  assertCond st "HOTT Cross-Mode Modal Box Univalence: trr(boxLine(L, uaNotD), box(L, true)) ~> box(L, false)"
+    (boxTrOk && boxTrNf == .boxIntro lMod (.ctor "Bool" "false" []))
+
+  let calcTm := narya_hoTT!
+    calc_eq(Bool == Bool by Glue(Bool, Bool, notEquiv) == Bool by <- Glue(Bool, Bool, notEquiv))
+  let calcCheckOk := (synthClosed hoTTWithNot calcTm).isOk
+  let calcTrNf := normalize hoTTWithNot [] 0 (.trr Dir.hott calcTm (.ctor "Bool" "true" []))
+  assertCond st "HOTT calc_eq(Bool == Bool by uaNot == Bool by <- uaNot) checks and transports true ~> true"
+    (calcCheckOk && calcTrNf == .ctor "Bool" "true" [])
+
 def runSyntaxAndDSLTests (st : IO.Ref TestState) : IO Unit := do
   IO.println "── Suite 5: Lean 4 Metaprogramming DSL & `.ny` Script Runner (`Narya.Elab`, `Narya.Syntax`) ──"
   let scriptSrc ← IO.FS.readFile "examples/univalence_and_modal.ny"

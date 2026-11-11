@@ -204,6 +204,33 @@ def elaborateSExp (fuel : Nat) (T : ModeTheory) (mode : ModeId) (locals : List S
       let l ← elaborateSExp fuel' T mode locals lineExp
       let x ← elaborateSExp fuel' T mode locals xExp
       .ok (.trl Dir.hott l x)
+    | .list [.atom "liftr", lineExp, xExp] => do
+      let l ← elaborateSExp fuel' T mode locals lineExp
+      let x ← elaborateSExp fuel' T mode locals xExp
+      .ok (.liftr Dir.hott l x)
+    | .list [.atom "liftl", lineExp, xExp] => do
+      let l ← elaborateSExp fuel' T mode locals lineExp
+      let x ← elaborateSExp fuel' T mode locals xExp
+      .ok (.liftl Dir.hott l x)
+    | .list [.atom "sym", pExp] => do
+      let p ← elaborateSExp fuel' T mode locals pExp
+      .ok (.sym Dir.hott p)
+    | .list [.atom "trans", pExp, qExp] => do
+      let p ← elaborateSExp fuel' T mode locals pExp
+      let q ← elaborateSExp fuel' T mode locals qExp
+      .ok (.trans Dir.hott p q)
+    | .list [.atom "arrow_line", dExp, cExp] => do
+      let d ← elaborateSExp fuel' T mode locals dExp
+      let c ← elaborateSExp fuel' T mode locals cExp
+      .ok (.arrowLine Dir.hott (ModPath.id mode) d c)
+    | .list [.atom "prod_line", .atom fN, .atom sN, fExp, sExp] => do
+      let f ← elaborateSExp fuel' T mode locals fExp
+      let s ← elaborateSExp fuel' T mode locals sExp
+      .ok (.prodLine Dir.hott fN sN f s)
+    | .list [.atom "box_line", .atom modStr, inExp] => do
+      let mp ← resolveModPath T mode modStr
+      let inner ← elaborateSExp fuel' T mp.dom locals inExp
+      .ok (.boxLine Dir.hott mp inner)
     | .list (fnExp :: argExps) => do
       let fn ← elaborateSExp fuel' T mode locals fnExp
       let args ← argExps.mapM (elaborateSExp fuel' T mode locals)

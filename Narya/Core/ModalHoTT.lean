@@ -267,4 +267,102 @@ theorem vertex_biased_assoc {k : Nat} (v : Fin k) {α : Type} (sq : Fin k → Fi
     (vertexBiasedUnit v).collapse (fun i => (vertexBiasedUnit v).collapse (sq i)) =
       (vertexBiasedUnit v).collapse (fun j => (vertexBiasedUnit v).collapse (fun i => sq i j)) := rfl
 
+/-! ## Open Problem E: Full Computational HOTT Fibrancy Across Type Formers (`hott.rst:32-37`) -/
+
+/-- **Theorem E.1 (`pi_transport_computes`)**:
+    Contravariant-covariant function transport law: transporting `f₀` forward along
+    `arrowLine .hott mod domLine codLine` and applying to `a₁` computes definitionally
+    to `trr codLine (f₀ (trl domLine a₁))`! -/
+theorem pi_transport_computes (fuel : Nat) (G : GlobalEnv) (mod : ModPath)
+    (domLine codLine f₀ a₁ : Val) :
+    applyVal (fuel + 1) G
+      (evalTrr 1 G .hott (.arrowLine .hott mod domLine codLine) f₀)
+      mod a₁ =
+    evalTrr fuel G .hott codLine
+      (applyVal fuel G f₀ mod (evalTrl fuel G .hott domLine a₁)) := by
+  simp [evalTrr, Val.force, applyVal]
+
+/-- **Theorem E.2 (`dependent_pi_transport_computes`)**:
+    Dependent modal `Π`-transport law (`fibrant_types.ny:132`): transporting `f₀` along
+    `piLine` uses backward transport `trl` + backward path lifting `liftl` on the argument
+    and forward transport `trr` along the instantiated codomain line! -/
+theorem dependent_pi_transport_computes (fuel : Nat) (G : GlobalEnv) (name : String)
+    (mod : ModPath) (domLine f₀ a₁ : Val) (env : List Val) (c0 c1 cL : Term) :
+    applyVal (fuel + 1) G
+      (evalTrr 1 G .hott (.piLine .hott name mod domLine env c0 c1 cL) f₀)
+      mod a₁ =
+    let a₀ := evalTrl fuel G .hott domLine a₁
+    let a₂ := evalLiftl fuel G .hott domLine a₁
+    let bLine := evalTerm fuel G (a₂ :: a₁ :: a₀ :: env) cL
+    evalTrr fuel G .hott bLine (applyVal fuel G f₀ mod a₀) := by
+  simp [evalTrr, Val.force, applyVal]
+
+/-- **Theorem E.3 (`sigma_dependent_transport_computes`)**:
+    Dependent `Σ`/record transport law (`fibrant_types.ny:85`): transporting `x₀` along
+    `sigLine` transports the first field via `trr` and transports the second field along
+    the family instantiated at `liftr` of the first field! -/
+theorem sigma_dependent_transport_computes (fuel : Nat) (G : GlobalEnv)
+    (fN sN : String) (fM sM : ModPath) (fL x₀ : Val) (env : List Val) (s0 s1 sL : Term) :
+    evalTrr (fuel + 1) G .hott (.sigLine .hott fN sN fM sM fL env s0 s1 sL) x₀ =
+      let u₀_fst := projVal fuel G x₀ fN
+      let u₀_snd := projVal fuel G x₀ sN
+      let u₁_fst := evalTrr fuel G .hott fL u₀_fst
+      let u_lift := evalLiftr fuel G .hott fL u₀_fst
+      let sLineVal := evalTerm fuel G (u_lift :: u₁_fst :: u₀_fst :: env) sL
+      .tuple [(fN, u₁_fst), (sN, evalTrr fuel G .hott sLineVal u₀_snd)] := by
+  simp [evalTrr, Val.force]
+
+/-- **Theorem E.4 (`modal_box_transport_computes`)**:
+    Commutation of HoTT transport with positive modal `boxIntro`: transporting `box(μ, x₀)`
+    along `boxLine .hott μ innerLine` computes directly to `box(μ, trr innerLine x₀)`! -/
+theorem modal_box_transport_computes (fuel : Nat) (G : GlobalEnv)
+    (μ : ModPath) (innerLine x₀ : Val) :
+    evalTrr (fuel + 1) G .hott (.boxLine .hott μ innerLine) (.boxIntro μ x₀) =
+      .boxIntro μ (evalTrr fuel G .hott innerLine x₀) := by
+  simp [evalTrr, Val.force]
+
+/-- **Theorem E.5 (`glue_roundtrip_iso`)**:
+    Computational Univalence roundtrip law: transporting `x₀` forward (`trr`) and then
+    backward (`trl`) across `Glue [A₀, A₁] ⟨fwd := λ x => fwdBody, bwd := λ y => bwdBody⟩`
+    reduces definitionally to `bwdBody[fwdBody[x₀]]`! -/
+theorem glue_roundtrip_iso (G : GlobalEnv) (A₀ A₁ x₀ : Val) (fwdBody bwdBody : Term) :
+    let idM := ModPath.id G.theory.defaultMode
+    let equivRec : Val := .tuple
+      [("fwd", .lam "x" idM (.mk [] fwdBody)),
+       ("bwd", .lam "y" idM (.mk [] bwdBody))]
+    let ua : Val := .gel .hott [A₀, A₁] equivRec
+    evalTrl 3 G .hott ua (evalTrr 3 G .hott ua x₀) =
+      evalTerm 1 G [evalTerm 1 G [x₀] fwdBody] bwdBody := by
+  simp [evalTrr, evalTrl, Val.force, lookupTupleField?, applyVal]
+
+/-- **Theorem E.6 (`trans_refl_left`, `trans_trr_functorial`, `sym_involutive_neu`)**:
+    Computational groupoid laws for equational `calc` reasoning:
+    1. Left identity `trans (refl x) q ↝ q` holds definitionally for all `q`.
+    2. Transport across a composite path `trans p q` factors definitionally as `trr q ∘ trr p`.
+    3. Symmetry on neutral paths is definitionally involutive (`sym (sym p) ↝ p`). -/
+@[simp]
+theorem trans_refl_left (fuel : Nat) (G : GlobalEnv) (x q : Val) :
+    evalTrans (fuel + 1) G .hott (.refl .hott x) q = q := by
+  simp [evalTrans, Val.force]
+
+theorem trans_trr_functorial (fuel : Nat) (G : GlobalEnv) (p q x₀ : Val) :
+    evalTrr (fuel + 1) G .hott (.trans .hott p q) x₀ =
+      evalTrr fuel G .hott q (evalTrr fuel G .hott p x₀) := by
+  simp [evalTrr, Val.force]
+
+theorem sym_involutive_neu (G : GlobalEnv) (hd : Head) (sp : List Elim)
+    (hNorm : ∀ rest, sp ≠ .sym .hott :: rest) :
+    evalSym 1 G .hott (evalSym 1 G .hott (.neu hd sp)) = .neu hd sp := by
+  cases sp with
+  | nil => simp [evalSym]
+  | cons e rest =>
+    cases e with
+    | sym g =>
+      by_cases hg : g = .hott
+      · subst hg
+        exact False.elim (hNorm rest rfl)
+      · have hNe : (Dir.hott == g) = false := beq_false_of_ne (Ne.symm hg)
+        simp [evalSym, hNe]
+    | _ => simp [evalSym]
+
 end Narya.Core.ModalHoTT
