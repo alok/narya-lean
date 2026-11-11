@@ -38,8 +38,58 @@ def strEq (a b : String) : Bool :=
 theorem strEq_eq_true (a b : String) : (strEq a b = true) ↔ (a = b) := by
   simp [strEq]
 
+/-- Quantitative resource usage grade (`0`, `1`, `ω`) for Quantitative / Linear Modal Type Theory
+    (`QTT` + Benton's `LNL`), driving compile-time erasure (`0`) and static `RC == 1` destructive
+    in-place reuse / zero-fan interaction nets (`1`)! -/
+inductive UsageGrade where
+  /-- `0`: Erased at runtime (types, dimension bridges, ghost specifications — 0 bytes, 0 instructions). -/
+  | zero
+  /-- `1`: Linear / unique ownership (used at most once — static `RC == 1`, zero refcounting, in-place FBIP). -/
+  | one
+  /-- `ω`: Unrestricted / Cartesian shared usage. -/
+  | omega
+  deriving DecidableEq, Repr, Inhabited
+
+namespace UsageGrade
+
+/-- Additive resource combination (`q₁ + q₂` across sequential subterms `f a` or `let x := v in b`). -/
+@[inline]
+def add : UsageGrade → UsageGrade → UsageGrade
+  | .zero, q => q
+  | q, .zero => q
+  | _, _ => .omega
+
+/-- Multiplicative modality scaling (`q₁ · q₂` when locking by a `q₁`-graded modality). -/
+@[inline]
+def mul : UsageGrade → UsageGrade → UsageGrade
+  | .zero, _ => .zero
+  | _, .zero => .zero
+  | .one, q => q
+  | q, .one => q
+  | .omega, .omega => .omega
+
+/-- Additive branching join (`lub q₁ q₂` across mutually exclusive `match` / `ifZero` arms:
+    using a linear `1` variable once in `then` and once in `else` has total usage `lub 1 1 = 1`!). -/
+@[inline]
+def lub : UsageGrade → UsageGrade → UsageGrade
+  | .zero, q => q
+  | q, .zero => q
+  | .one, .one => .one
+  | _, _ => .omega
+
+/-- Subsumption order `actual ≤ allowed` (`0 ≤ 1 ≤ ω` for affine-linear unique ownership). -/
+@[inline]
+def leq : UsageGrade → UsageGrade → Bool
+  | .zero, _ => true
+  | .one, .one => true
+  | .one, .omega => true
+  | .omega, .omega => true
+  | _, _ => false
+
+end UsageGrade
+
 /-- Structural flags of a modality `μ : M → N`, unifying `docs/source/modal.rst`,
-    `discrete.rst`, `external.rst`, and `displayed.rst`. -/
+    `discrete.rst`, `external.rst`, `displayed.rst`, and quantitative linear `QTT`/`LNL`. -/
 structure ModalityFlags where
   /-- Admits positive modal pattern matching (`match x with | (y : μ) => ...`). -/
   tangible : Bool := true
@@ -55,11 +105,13 @@ structure ModalityFlags where
   discreteDirs : List Dir := []
   /-- Acts as a parametricity locker blocking external types (`-external` / `-dtt`). -/
   isLocker : Bool := false
+  /-- Quantitative usage grade (`1` for identity/linear, `0` for ghost/erased, `ω` for `!`-shared). -/
+  grade : UsageGrade := .omega
   deriving DecidableEq, Repr, Inhabited
 
 namespace ModalityFlags
 
-/-- Flags of the identity modality `1_M : M → M`. -/
+/-- Flags of the identity modality `1_M : M → M` (multiplicative identity `grade := .one`!). -/
 def id : ModalityFlags :=
   { tangible := true
     pellucid := true
@@ -67,9 +119,10 @@ def id : ModalityFlags :=
     translucent := true
     sinister := true
     discreteDirs := []
-    isLocker := false }
+    isLocker := false
+    grade := .one }
 
-/-- Flags of a composite modality `f ∘ g` (apply `g`, then `f`). -/
+/-- Flags of a composite modality `f ∘ g` (apply `g`, then `f`; grades multiply in the QTT semiring!). -/
 def comp (f g : ModalityFlags) : ModalityFlags :=
   { tangible := f.tangible && g.tangible
     pellucid := f.pellucid && g.pellucid
@@ -77,7 +130,8 @@ def comp (f g : ModalityFlags) : ModalityFlags :=
     translucent := f.translucent && g.translucent
     sinister := f.sinister && g.sinister
     discreteDirs := f.discreteDirs ++ g.discreteDirs
-    isLocker := f.isLocker || g.isLocker }
+    isLocker := f.isLocker || g.isLocker
+    grade := UsageGrade.mul f.grade g.grade }
 
 /-- Whether a modality discretizes (collapses) a given dimension direction `d`. -/
 def isDiscreteFor (fl : ModalityFlags) (d : Dir) : Bool :=
@@ -427,9 +481,15 @@ structure ModeTheory where
   twoCells : List TwoCellGen
   rules : List TwoCellRule := []
   defaultMode : ModeId := "M"
+  /-- Modes enforcing Quantitative/Linear (`1`-graded) variable usage (`LNL` / `QTT`). -/
+  linearModes : List ModeId := []
   deriving DecidableEq, Repr, Inhabited
 
 namespace ModeTheory
+
+/-- Whether mode `m` enforces substructural linear (`1`-graded) ownership in `T`. -/
+def isLinearMode (T : ModeTheory) (m : ModeId) : Bool :=
+  T.linearModes.any (fun x => strEq x m)
 
 /-- Look up a generating modality by name. -/
 def findMod? (T : ModeTheory) (name : ModId) : Option ModGen :=
@@ -442,6 +502,7 @@ def findTwoCell? (T : ModeTheory) (name : KeyId) : Option TwoCellGen :=
 /-- Check that every modality, 2-cell, and rule in `T` is well-formed over `T.modes`. -/
 def wf (T : ModeTheory) : Bool :=
   (T.modes.contains T.defaultMode) &&
+  (T.linearModes.all T.modes.contains) &&
   T.modalities.all (fun g => T.modes.contains g.dom && T.modes.contains g.cod) &&
   T.twoCells.all (fun c =>
     T.modes.contains c.domMode && T.modes.contains c.codMode &&

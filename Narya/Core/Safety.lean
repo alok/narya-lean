@@ -78,6 +78,12 @@ def mentionsData (dName : String) : Term → Bool
   | .pathJ _ t b m rc tg p =>
     mentionsData dName t || mentionsData dName b || mentionsData dName m ||
     mentionsData dName rc || mentionsData dName tg || mentionsData dName p
+  | .funext _ _ b => mentionsData dName b
+  | .hap _ pf a₀ a₁ pa =>
+    mentionsData dName pf || mentionsData dName a₀ || mentionsData dName a₁ || mentionsData dName pa
+  | .u64Ty | .u64Lit _ => false
+  | .u64BinOp _ l r | .u64Repeat _ l r => mentionsData dName l || mentionsData dName r
+  | .u64IfZero c z nz => mentionsData dName c || mentionsData dName z || mentionsData dName nz
 
 end
 

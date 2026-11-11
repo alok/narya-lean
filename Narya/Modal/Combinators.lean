@@ -92,7 +92,8 @@ def renameModes (ren : ModeId → ModeId) (T : ModeTheory) : ModeTheory :=
     twoCells := dedup (T.twoCells.map (renameModeInTwoCell ren))
     rules := T.rules.map (fun r =>
       { r with lhs := renameModeInExpr ren r.lhs, rhs := renameModeInExpr ren r.rhs })
-    defaultMode := ren T.defaultMode }
+    defaultMode := ren T.defaultMode
+    linearModes := dedup (T.linearModes.map ren) }
 
 /-- Disjoint coproduct of two mode theories (assuming distinct identifier namespaces
     or after applying `renameModes`). -/
@@ -102,7 +103,8 @@ def coproduct (name : String) (T₁ T₂ : ModeTheory) : ModeTheory :=
     modalities := dedup (T₁.modalities ++ T₂.modalities)
     twoCells := dedup (T₁.twoCells ++ T₂.twoCells)
     rules := dedup (T₁.rules ++ T₂.rules)
-    defaultMode := T₁.defaultMode }
+    defaultMode := T₁.defaultMode
+    linearModes := dedup (T₁.linearModes ++ T₂.linearModes) }
 
 /-- **Pushout / Amalgamation Combinator (`amalgamate`)**:
     Combines `T₁` and `T₂` while identifying each mode pair `(m₁, m₂) ∈ glueModes`
@@ -404,7 +406,30 @@ def perfectibleOptTheory : ModeTheory :=
     { tangible := true, pellucid := true, translucent := true, discreteDirs := [.param 2] }
   addLocker adj "Logic" "specLock"
 
-/-- Complete catalog of all 18+ first-class mode theories available out of the box. -/
+/-- 21. **Linear-Non-Linear Quantitative Adjoint Theory (`linearAdjoint` / Benton's `LNL` + `QTT`)**:
+    - Mode `"Lin"` (`linearModes := ["Lin"]`): variables bound at `1_Lin` have grade `1`
+      (unique ownership: **static `RC == 1` exclusivity**, zero refcounting, destructive FBIP
+      in-place reuse, and fan-free `0`-`DUP` Interaction Net compilation!).
+    - Mode `"Cart"`: unrestricted Cartesian mode (`ω`).
+    - Sinister adjunction `F ⊣ G` (`F : Cart → Lin`, `G : Lin → Cart`), inducing exponential
+      comonad `! = F ∘ G : Lin → Lin` of grade `ω · ω = ω` with dereliction `ε_lnl : F∘G ⇒ 1_Lin`!
+    - Ghost erasure modality `Ghost0 : Cart → Lin` (`grade := .zero`, `discreteDirs := [.param 2]`),
+      enforcing `0` runtime uses so specifications & bridges erase completely! -/
+def linearAdjointTheory : ModeTheory :=
+  let adj := adjunctionNamed "linear_adjoint" "Cart" "Lin" "F" "G" "η_lnl" "ε_lnl"
+    { tangible := true, pellucid := true, sinister := true, grade := .omega }
+    { tangible := true, pellucid := true, translucent := true, grade := .omega }
+  let ghostGen : ModGen :=
+    { name := "Ghost0"
+      dom := "Cart"
+      cod := "Lin"
+      flags := { tangible := true, pellucid := true, discreteDirs := [.param 2], grade := .zero } }
+  { adj with
+    modalities := adj.modalities ++ [ghostGen]
+    defaultMode := "Lin"
+    linearModes := ["Lin"] }
+
+/-- Complete catalog of all 21 first-class mode theories available out of the box. -/
 def standardCatalog : List ModeTheory :=
   [ pureHoTT
   , functorTheory
@@ -425,7 +450,8 @@ def standardCatalog : List ModeTheory :=
   , guardedTheory
   , externalParamTheory
   , displayedTheory
-  , perfectibleOptTheory ]
+  , perfectibleOptTheory
+  , linearAdjointTheory ]
 
 /-! ### Machine-Checked Well-Formedness Certificates (`zero sorry`) -/
 
@@ -442,6 +468,8 @@ theorem externalParamTheory_wf : externalParamTheory.wf = true := by decide
 theorem displayedTheory_wf : displayedTheory.wf = true := by decide
 
 theorem perfectibleOptTheory_wf : perfectibleOptTheory.wf = true := by decide
+
+theorem linearAdjointTheory_wf : linearAdjointTheory.wf = true := by decide
 
 theorem standardCatalog_all_wf : (standardCatalog.all ModeTheory.wf) = true := by decide
 

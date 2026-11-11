@@ -99,6 +99,15 @@ def equalVal (fuel : Nat) (G : GlobalEnv) (depth : Nat) (v₁ v₂ : Val) : Bool
       (g₁ == g₂) && equalVal fuel' G depth l₁ l₂ && equalVal fuel' G depth x₁ x₂
     | .liftl g₁ l₁ x₁, .liftl g₂ l₂ x₂ =>
       (g₁ == g₂) && equalVal fuel' G depth l₁ l₂ && equalVal fuel' G depth x₁ x₂
+    | .funext g₁ m₁ e₁ b₁, .funext g₂ m₂ e₂ b₂ =>
+      let v0 := Val.vvar depth
+      let v1 := Val.vvar (depth + 1)
+      let v2 := Val.vvar (depth + 2)
+      (g₁ == g₂) && decide (m₁ = m₂) &&
+      equalVal fuel' G (depth + 3) (evalTerm fuel' G (v2 :: v1 :: v0 :: e₁) b₁)
+        (evalTerm fuel' G (v2 :: v1 :: v0 :: e₂) b₂)
+    | .u64Ty, .u64Ty => true
+    | .u64Lit a, .u64Lit b => a == b
     | _, _ => false
 
 /-- Type-directed conversion `G; depth ⊢ v₁ ≡ v₂ : ty` implementing Narya's `EQUAL.md` 3-tier order:
@@ -208,6 +217,17 @@ def equalElim (fuel : Nat) (G : GlobalEnv) (depth : Nat) (e₁ e₂ : Elim) : Bo
       equalVal fuel' G depth m₁ m₂ &&
       equalVal fuel' G depth rc₁ rc₂ &&
       equalVal fuel' G depth tg₁ tg₂
+    | .hap g₁ a0₁ a1₁ pa₁, .hap g₂ a0₂ a1₂ pa₂ =>
+      (g₁ == g₂) &&
+      equalVal fuel' G depth a0₁ a0₂ &&
+      equalVal fuel' G depth a1₁ a1₂ &&
+      equalVal fuel' G depth pa₁ pa₂
+    | .u64BinOpL op₁ r₁, .u64BinOpL op₂ r₂ =>
+      (op₁ == op₂) && equalVal fuel' G depth r₁ r₂
+    | .u64BinOpR op₁ l₁, .u64BinOpR op₂ l₂ =>
+      (op₁ == op₂) && (l₁ == l₂)
+    | .u64IfZero z₁ nz₁, .u64IfZero z₂ nz₂ =>
+      equalVal fuel' G depth z₁ z₂ && equalVal fuel' G depth nz₁ nz₂
     | _, _ => false
 
 end

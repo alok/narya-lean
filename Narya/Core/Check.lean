@@ -32,6 +32,17 @@ def ensureUniverse (tyVal : Val) : CheckM Nat :=
   | .uuExt l => .ok l
   | other => .error s!"Expected a universe (UU or UU_ext), got: {reprStr other}"
 
+/-- Unfold one step of a lazy `Energy.potential` coinductive type definition (such as `Stream` or `SST`)
+    when inspecting type constructors in `synthTerm` / `checkTerm`. -/
+def unfoldTypeHead (fuel : Nat) (G : GlobalEnv) (v : Val) : Val :=
+  match v.force with
+  | .neu (.potential name) rspine =>
+    match G.lookup? name with
+    | some (.defn _ _ _ _ body) =>
+      (replaySpine fuel G (evalTerm fuel G [] body) rspine.reverse).force
+    | _ => v.force
+  | other => other
+
 /-- Lock a `TCtx Val` when entering a modal position `mod : dom → Γ.mode`
     (so inside the modal position, the active mode is `mod.dom`! Wait: let's check
     adjunction/modality composition carefully:
@@ -266,10 +277,19 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
     | .proj sub field => do
       let (sub', subTy) ← synthTerm fuel' G Γ sub
       let subVal := evalTerm fuel' G Γ.idEnv sub'
-      match subTy.force with
+      match unfoldTypeHead fuel' G subTy with
       | .recordTy rEnv fields =>
         let fieldTy ← lookupRecordFieldTy fuel' G rEnv subVal field fields
         .ok (.proj sub' field, fieldTy)
+      | .obsEq g recTy ends =>
+        match unfoldTypeHead fuel' G recTy with
+        | .recordTy rEnv fields =>
+          let sampleSelf := ends.head?.getD subVal
+          let fieldTy ← lookupRecordFieldTy fuel' G rEnv sampleSelf field fields
+          let projEnds := ends.map (fun e => projVal fuel' G e field)
+          .ok (.proj sub' field, evalObsEq fuel' G g fieldTy projEnds)
+        | other =>
+          .error s!"Expected record/codata inside bridge projection '.{field}', got: {reprStr other}"
       | other =>
         .error s!"Expected record/codata type in projection '.{field}', got: {reprStr other}"
 
@@ -647,6 +667,54 @@ def synthTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) : CheckM (T
         let outTy := applyVal fuel' G (applyVal fuel' G motVal idM targetVal) idM pathVal
         .ok (.pathJ g ty' base' motive' reflCase' target' path', outTy)
 
+    | .hap g pf a₀ a₁ pa =>
+      if g.arity != 2 then
+        .error "hap requires a binary direction"
+      else do
+        let (pf', pfTy) ← synthTerm fuel' G Γ pf
+        match pfTy.force with
+        | .obsEq g' piTy [f₀, f₁] =>
+          if g != g' then .error "Direction mismatch in hap"
+          else
+            match piTy.force with
+            | .pi _ mod domVal codCl => do
+              let a₀' ← checkTerm fuel' G (Γ.lockBy mod) a₀ domVal
+              let a₁' ← checkTerm fuel' G (Γ.lockBy mod) a₁ domVal
+              let a₀Val := evalTerm fuel' G Γ.idEnv a₀'
+              let a₁Val := evalTerm fuel' G Γ.idEnv a₁'
+              let argBrTy := evalObsEq fuel' G g domVal [a₀Val, a₁Val]
+              let pa' ← checkTerm fuel' G (Γ.lockBy mod) pa argBrTy
+              let codVal := evalClosure fuel' G codCl a₀Val
+              let app₀ := applyVal fuel' G f₀ mod a₀Val
+              let app₁ := applyVal fuel' G f₁ mod a₁Val
+              .ok (.hap g pf' a₀' a₁' pa', evalObsEq fuel' G g codVal [app₀, app₁])
+            | other => .error s!"hap expects a bridge over a Π-type, got: {reprStr other}"
+        | other => .error s!"hap expects a binary ObsEq of functions, got: {reprStr other}"
+
+    | .u64Ty =>
+      .ok (.u64Ty, .uu 0)
+
+    | .u64Lit v =>
+      .ok (.u64Lit v, .u64Ty)
+
+    | .u64BinOp op lhs rhs => do
+      let lhs' ← checkTerm fuel' G Γ lhs .u64Ty
+      let rhs' ← checkTerm fuel' G Γ rhs .u64Ty
+      .ok (.u64BinOp op lhs' rhs', .u64Ty)
+
+    | .u64IfZero cond zBr nzBr => do
+      let cond' ← checkTerm fuel' G Γ cond .u64Ty
+      let (zBr', outTy) ← synthTerm fuel' G Γ zBr
+      let nzBr' ← checkTerm fuel' G Γ nzBr outTy
+      .ok (.u64IfZero cond' zBr' nzBr', outTy)
+
+    | .u64Repeat iters init stepBody => do
+      let init' ← checkTerm fuel' G Γ init .u64Ty
+      let step' ← checkTerm fuel' G (Γ.extend "acc" (ModPath.id Γ.mode) .u64Ty) stepBody .u64Ty
+      .ok (.u64Repeat iters init' step', .u64Ty)
+
+    | .funext _ _ _ =>
+      .error "funext requires an expected ObsEq Π-type annotation (check mode)"
     | .lam _ _ _ =>
       .error "Lambda requires an expected Π-type annotation (check mode)"
     | .tuple _ =>
@@ -657,7 +725,7 @@ def checkTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) (expectedTy
   match fuel with
   | 0 => .error "Typechecker out of fuel"
   | fuel' + 1 =>
-    match tm, expectedTy.force with
+    match tm, unfoldTypeHead fuel' G expectedTy with
     | .lam name mod body, .pi _ expMod domVal codCl =>
       if mod != expMod then
         .error s!"Lambda modality {mod.pretty} does not match Π modality {expMod.pretty}"
@@ -667,9 +735,43 @@ def checkTerm (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (tm : Term) (expectedTy
         let body' ← checkTerm fuel' G (Γ.extend name mod domVal) body codVal
         .ok (.lam name mod body')
 
+    | .funext g mod body, .obsEq g' piTy [f₀, f₁] =>
+      if g != g' || g.arity != 2 then
+        .error "Direction mismatch in funext"
+      else
+        match unfoldTypeHead fuel' G piTy with
+        | .pi name expMod domVal codCl =>
+          if mod != expMod then
+            .error s!"funext modality {mod.pretty} does not match Π modality {expMod.pretty}"
+          else do
+            let d := Γ.length
+            let v₀ := Val.vvar d
+            let v₁ := Val.vvar (d + 1)
+            let brDom := evalObsEq fuel' G g domVal [v₀, v₁]
+            let Γ₃ := ((Γ.extend (name ++ "0") mod domVal).extend (name ++ "1") mod domVal).extend (name ++ "2") mod brDom
+            let cod₀ := evalClosure fuel' G codCl v₀
+            let app₀ := applyVal fuel' G f₀ mod v₀
+            let app₁ := applyVal fuel' G f₁ mod v₁
+            let targetBrTy := evalObsEq fuel' G g cod₀ [app₀, app₁]
+            let body' ← checkTerm fuel' G Γ₃ body targetBrTy
+            .ok (.funext g mod body')
+        | other =>
+          .error s!"funext expected an ObsEq over a Π-type, got: {reprStr other}"
+
     | .tuple fields, .recordTy rEnv tele => do
       let fields' ← checkTupleAgainstTele fuel' G Γ rEnv tele fields
       .ok (.tuple fields')
+
+    | .tuple fields, .obsEq g recTy [r₀, r₁] =>
+      if g.arity != 2 then
+        .error "Record/codata bisimulation tuple requires a binary direction"
+      else
+        match unfoldTypeHead fuel' G recTy with
+        | .recordTy rEnv tele => do
+          let fields' ← checkBridgeTupleAgainstTele fuel' G Γ g rEnv r₀ r₁ tele fields
+          .ok (.tuple fields')
+        | other =>
+          .error s!"Bisimulation tuple expected an ObsEq over a recordTy, got: {reprStr other}"
 
     | .gelIntro g ends wit, .obsHet g' tyB expEnds =>
       if g != g' then .error "Direction mismatch in gelIntro"
@@ -764,6 +866,26 @@ def checkTupleAgainstTele (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (rEnv : Lis
         let rest' ← checkTupleAgainstTele fuel' G Γ (gVal :: rEnv) teleRest valRest
         .ok ((fname, gtm') :: rest')
   | _, _ => .error "Tuple field count mismatch"
+
+def checkBridgeTupleAgainstTele (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (g : Dir)
+    (rEnv : List Val) (r₀ r₁ : Val) :
+    List (String × ModPath × Term) → List (String × Term) → CheckM (List (String × Term))
+  | [], [] => .ok []
+  | (fname, fmod, fty) :: teleRest, (gname, gtm) :: valRest =>
+    match fuel with
+    | 0 => .error "Out of fuel"
+    | fuel' + 1 =>
+      if !strEq fname gname then
+        .error s!"Bisimulation tuple field mismatch: expected '{fname}', got '{gname}'"
+      else do
+        let ftyVal := evalTerm fuel' G rEnv fty
+        let e₀ := projVal fuel' G r₀ fname
+        let e₁ := projVal fuel' G r₁ fname
+        let brFieldTy := evalObsEq fuel' G g ftyVal [e₀, e₁]
+        let gtm' ← checkTerm fuel' G (Γ.lockBy fmod) gtm brFieldTy
+        let rest' ← checkBridgeTupleAgainstTele fuel' G Γ g (e₀ :: rEnv) r₀ r₁ teleRest valRest
+        .ok ((fname, gtm') :: rest')
+  | _, _ => .error "Bisimulation tuple field count mismatch"
 
 def checkTeleArgs (fuel : Nat) (G : GlobalEnv) (Γ : MTTCtx) (accEnv : List Val) :
     List Term → List Term → CheckM (List Term)
