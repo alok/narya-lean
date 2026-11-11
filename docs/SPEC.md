@@ -22,6 +22,10 @@ Plain intensional dependent type theory (such as MLTT) makes a programming langu
    - **Problem F — Glued Ternary Miller Pattern Unification (`Narya.Core.Unify`, `EQUAL.md:170–202`)**: Implements transactional `MetaCtx` (`generation` stamps, `FallbackPolicy.localRetry` vs `strictSmalltt`), ternary `UnifyOutcome` (`.equal`, `.notEqual`, `.blocked`), and glued-preserving Miller pattern readback (`quotePatternRHS?` keeping `.glued` constants unfold-free when well-scoped and pruning out-of-scope arguments via `forced` fallback).
    - **Problem G — Logical Consistency Guards (`Narya.Core.Safety`)**: Implements strict positivity (`checkDataSpecPositivity`), kinetic vs potential coinductive guardedness (`checkDefGuardedness`), Hofmann–Streicher `--without-K` pattern index linearity/acyclicity (`checkWithoutKPathMatch`), and a kernel proof `univalence_refutes_axiomK` refuting Axiom K directly from `Glue(Bool, Bool, notEquiv)`.
    - **Problem H — Register Promotion, Counted Hardware Loops & Cross-Platform `AArch64` (`Narya.Compiler.*`)**: Promotes lexical bindings, loop accumulators, and `binOp` operands to caller-saved registers `x4..x7` (`0` stack memory instructions on hot loops), compiles `repeatLoop` to hardware `cbnz x8` counted loops (automatically saving/restoring `x8` across nested loops), keeps `LIR.exec`/`Arm64.exec` purely structural via `iterStep` for kernel `decide` reduction, and emits both macOS Mach-O (`_narya_entry`) and Linux ELF (`narya_entry`) `AArch64` binaries.
+   - **Problem I — Quantitative & Linear Adjoint Type Theory (`Narya.Core.Linear`, `linearAdjointTheory`)**: Integrates `0 / 1 / ω` `UsageGrade` semiring grades into `ModalityFlags` and Benton's `LNL` adjunction (`F ⊣ G`, `! = F ∘ G`, `Ghost0`), proving static `0`-erasure (`ghost0_erasure_enforced`), `1`-uniqueness (`canMutateInPlace` FBIP reuse), and modal multiplication (`varUsage_mod_mul`).
+   - **Problem J — Sorbet-Style Flat Symbol Interning & 16-Byte `PackedNode` Arena (`Narya.Fast.Arena`)**: Eliminates pointer-chasing inductive AST walks and `O(n)` string scans via 32-bit `SymId`, `FastGlobalTable`, and contiguous 16-byte `PackedNode` (`w0, w1 : UInt64`) hash-consed `TermArena` (`bv_decide` bitfield roundtrip proofs + zero-allocation `evalU64`).
+   - **Problem K — Flat-Array Linear Interaction Nets (`Narya.Fast.InteractionNet`)**: Compiles `1`-graded linear terms into Lafont Symmetric Interaction Combinators (`32`-bit packed `Port`) with `freeList` node recycling, proving `0` `DUP` fan nodes and `0` reduction arena allocations (`linear_pipeline_valid_and_zero_dups`).
+   - **Problem L — Verified `Core.NbE → Arm64` Proof Erasure, `ThinEmitter` Binary Codegen, W^X `MAP_JIT` & Merkle Builder (`Narya.Compiler.Erasure`, `ThinEmitter`, `Narya.Meta.*`)**: Proves `core_nbe_to_arm64_correct` (`0 sorry`), encodes 32-bit ARMv8-A opcodes directly into a `ByteArray` (`bv_decide`), executes in-process in ~5 µs via `cbits/narya_jit.c` (`MAP_JIT` / `mprotect`), and equips the language with `@[noinline]` nanosecond+allocation `Profiler` and Lake-style Merkle `BuildTrace` (`1723` root) package builds.
 3. **Lean 4 Metaprogramming & Familiar Syntax (`Narya.Elab.*`, `Narya.Syntax.*`)**:
    - Familiar Lean-style DSL (`mode_theory`, `narya_def`, `#narya_check`, `#narya_eval`, `#narya_asm`) with custom syntax categories, hover-friendly elaboration, and `.ny` parser support.
 4. **Verified Optimization via Theory/Cost Combinators & Multi-IR Native ARM64 Codegen (`Narya.Compiler.*`)**:
@@ -52,14 +56,22 @@ Plain intensional dependent type theory (such as MLTT) makes a programming langu
 | | `Narya.Core.Equal` | 3-tier conversion checker (pointer/structural fast-path → spine-first → η + local glued unfold) | Reflexivity & spine-first soundness |
 | | `Narya.Core.Check` | Bidirectional modal + higher-dimensional typechecker | Typechecks parametricity, HoTT, dTT (`SST`), cohesive examples |
 | | `Narya.Core.ModalHoTT` | Formal resolution of Modal HoTT transport, discrete windows, & biased discrete units | `adjoint_modal_trr_coh`, `discrete_window_factor`, `no_unbiased_discrete_unit_ge2`, `biased_unit_coherent` |
-| **4. Syntax** | `Narya.Elab.DSL` | Lean 4 metaprogramming DSL (`mode_theory`, `narya!`, `#narya_check`, `#narya_eval`, `#narya_asm`) | Compile-time elaboration tests |
-| | `Narya.Syntax.Parser` | Standalone surface parser & pretty-printer for CLI `.ny` / `.narya` snippets | Roundtrip & CLI execution tests |
+| | `Narya.Core.Level` | Predicative `Mugen` algebraic universe expressions (`max`, `+k`) | `checkLevelLeq_sound`, `no_girard_type_in_type` |
+| | `Narya.Core.Linear` | `0 / 1 / ω` QTT semiring & Benton `LNL` linear usage checker | `varUsage_mod_mul`, `ghost0_erasure_enforced`, `lnl_linear_vs_bang_duplication` |
+| **4. Syntax** | `Narya.Elab.DSL` | Lean 4 metaprogramming DSL (`def_mode_theory`, `narya!`, `#narya_check`, `#narya_eval`, `#narya_jit`) | Compile-time elaboration & JIT tests |
+| | `Narya.Syntax.Parser` | Standalone surface parser, import extractor & safe runner for `.ny` modules | Roundtrip, linearity & CLI execution tests |
 | **5. Fast & Compiler** | `Narya.Fast.PackedDim` | Unboxed `UInt64` bit-packed strict faces & degeneracies | Isomorphism & homomorphism proofs vs `Narya.Dim.SFace`/`SDeg` |
+| | `Narya.Fast.Arena` | Sorbet-style 32-bit `SymId`, `FastGlobalTable`, & 16-byte `PackedNode` `TermArena` | `pack_unpack_tag`, `pack_unpack_abc`, `pack_unpack_u64Lit` (`bv_decide`) |
+| | `Narya.Fast.InteractionNet` | Flat-array Lafont Symmetric Interaction Combinators (`32`-bit `Port`) | `pack_unpack_slot`, `linear_pipeline_valid_and_zero_dups` |
 | | `Narya.Compiler.TimeM` | CSLib-style `TimeM` cost monad + modal representation-bridge optimization framework | Verified representation swap (`Unary ↔ Packed`, `Slow ↔ Fast`) with strict cost bound |
-| | `Narya.Compiler.HIR` | High-level IR (modal/bridge/proof erasure) + verified optimizer (const-fold, algebraic, DCE) | `evalHIR_opt_eq` (`zero sorry`) |
-| | `Narya.Compiler.MIR` | Mid-level IR (join points + Perceus `reset`/`reuse` uniqueness analysis) | `evalMIR_lower_eq` (`zero sorry`) |
-| | `Narya.Compiler.LIR` | Low-level register/slot machine IR with `TimeM` instruction costs | `evalLIR_lower_eq` (`zero sorry`) |
-| | `Narya.Compiler.Arm64` | Native Apple Silicon `AArch64` assembly emitter + formal register machine | `runArm64_emit_eq` (`zero sorry`) + live `clang` Mach-O execution test |
+| | `Narya.Compiler.HIR` | High-level IR (modal/bridge/proof erasure) + verified optimizer (const-fold, algebraic, DCE) | `HIR.eval_opt_eq` (`zero sorry`) |
+| | `Narya.Compiler.MIR` | Mid-level IR (join points + Perceus `reset`/`reuse` uniqueness analysis) | `MIR.eval_lower_eq` (`zero sorry`) |
+| | `Narya.Compiler.LIR` | Low-level register/slot machine IR with `TimeM` instruction costs | `LIR.exec_compileAux` (`zero sorry`) |
+| | `Narya.Compiler.Arm64` | Native `AArch64` assembly emitter + formal register machine | `Arm64.compileFullPipeline_correct` (`zero sorry`) |
+| | `Narya.Compiler.Erasure` | End-to-end `Core.evalTerm → HIR.eval → Arm64.exec` proof erasure simulation | `evalTerm_erasure_sound`, `core_nbe_to_arm64_correct` (`zero sorry`) |
+| | `Narya.Compiler.ThinEmitter` | Direct ARMv8-A 32-bit binary encoder (`ByteArray`) + W^X `MAP_JIT` (`cbits/narya_jit.c`) | `decode_encodeMovz`, `decode_encodeMovk`, `decode_encodeAluReg` (`bv_decide`) |
+| **6. Meta** | `Narya.Meta.Profiler` | Hierarchical nanosecond + `IO.getNumHeartbeats` heap-allocation profiler & Chrome/Flamegraph export | Suite 8 span, allocation & JSON/folded verification |
+| | `Narya.Meta.Build` | Lake-inspired Merkle `BuildTrace` (`1723` seed) incremental DAG builder (`narya.toml`) | Cold build + `.arm64.bin` `MAP_JIT` + `4/4` cached rebuild + cycle rejection |
 
 ---
 
