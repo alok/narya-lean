@@ -1,11 +1,12 @@
 /-
-  Narya.Compiler.HIR — High-Level Erased Functional IR & Verified Algebraic Optimizer
+  Narya.Compiler.HIR — High-Level Erased Functional IR & Verified Algebraic/Loop Optimizer
 
   Stage 1 of Leonardo de Moura's SViL Nov 2026 "New Code Generator" architecture:
-    `Narya.Core.Term` ──(type/bridge/modality erasure)──▶ `HIR` ──(`optHIR`)──▶ `HIR`
+    `Narya.Core.Term` ──(type/bridge/modality erasure)──▶ `HIR` ──(`HIR.opt`)──▶ `HIR`
 
-  Every pass has formal semantics (`evalHIR`) and machine-checked soundness (`evalHIR_optHIR`,
-  `zero sorry`, powered by `bv_decide` on 64-bit machine arithmetic!).
+  Every pass has formal semantics (`HIR.eval`) and machine-checked soundness (`HIR.eval_opt_eq`,
+  `zero sorry`, powered by `bv_decide` on 64-bit machine arithmetic, dead-loop elimination,
+  and single-trip loop unrolling).
 -/
 import Std.Tactic.BVDecide
 import Narya.Core.Syntax
@@ -13,6 +14,19 @@ import Narya.Core.Syntax
 namespace Narya.Compiler
 
 open Narya.Core
+
+/-- Iterate `f` `n` times starting from `x` (`n` counted loop trips). -/
+def iterN {α : Type} : Nat → (α → α) → α → α
+  | 0, _, x => x
+  | n + 1, f, x => iterN n f (f x)
+
+theorem iterN_congr {α : Type} (n : Nat) (f g : α → α) (x : α)
+    (hfg : ∀ a, f a = g a) : iterN n f x = iterN n g x := by
+  induction n generalizing x with
+  | zero => rfl
+  | succ k ih =>
+    simp only [iterN, hfg]
+    exact ih (g x)
 
 /-- Binary 64-bit machine operations in `HIR`, `MIR`, `LIR`, and `Arm64`. -/
 inductive BinOp64 where
@@ -50,7 +64,7 @@ inductive HIR where
   | lit (val : UInt64)
   /-- Hardware input parameter (`param 0` = `x0`, `param 1` = `x1` in AAPCS64). -/
   | param (idx : Fin 2)
-  /-- Lexical `let`-bound De Bruijn variable (`0` = innermost `letBind`). -/
+  /-- Lexical `let`-bound De Bruijn variable (`0` = innermost `letBind` or loop accumulator). -/
   | var (ix : Nat)
   /-- Binary 64-bit ALU / bitwise operation. -/
   | binOp (op : BinOp64) (lhs rhs : HIR)
@@ -58,6 +72,9 @@ inductive HIR where
   | letBind (val : HIR) (body : HIR)
   /-- Branch on zero (`if cond == 0 then zeroBr else nonZeroBr`, matching ARM64 `cbz`). -/
   | ifZero (cond : HIR) (zeroBr : HIR) (nonZeroBr : HIR)
+  /-- Counted hardware loop: evaluates `acc₀ := init`, then iterates `stepBody` `count.toNat` times
+      with the live accumulator bound at `.var 0` (`acc :: env`). -/
+  | repeatLoop (count : UInt64) (init : HIR) (stepBody : HIR)
   deriving DecidableEq, Repr, Inhabited
 
 namespace HIR
@@ -76,6 +93,8 @@ def eval (p₀ p₁ : UInt64) (env : List UInt64) : HIR → UInt64
   | .ifZero cond zBr nzBr =>
     if eval p₀ p₁ env cond == 0 then eval p₀ p₁ env zBr
     else eval p₀ p₁ env nzBr
+  | .repeatLoop count init stepBody =>
+    iterN count.toNat (fun acc => eval p₀ p₁ (acc :: env) stepBody) (eval p₀ p₁ env init)
 
 /-! ### Erasure from `Narya.Core.Term` to `HIR` -/
 
@@ -111,7 +130,7 @@ theorem erase_box_transparent (m : Narya.Modal.ModPath) (t : Term) :
 theorem erase_refl_transparent (g : Narya.Dim.Dir) (t : Term) :
     eraseFromCore (.refl g t) = eraseFromCore t := rfl
 
-/-! ### Verified `HIR` Optimizer: Constant Folding, Strength Reduction (`* 2 ↝ <<< 1`), & Dead Branch Elimination -/
+/-! ### Verified `HIR` Optimizer: Constant Folding, Strength Reduction (`* 2 ↝ <<< 1`), Dead Branches & Loop Simplification -/
 
 theorem mul_two_eq_shl_one (x : UInt64) :
     x * 2 = x <<< ((1 : UInt64) &&& 63) := by
@@ -165,7 +184,8 @@ theorem eval_smartBinOp (p₀ p₁ : UInt64) (env : List UInt64) (op : BinOp64) 
   · rfl
 
 /-- Bottom-up `HIR` optimizing pass: folds constants, reduces algebraic identities & shifts,
-    and eliminates statically known `ifZero` branches! -/
+    eliminates statically known `ifZero` branches, eliminates 0-trip `repeatLoop`s, and
+    unrolls 1-trip `repeatLoop`s into register-promotable `letBind`s! -/
 def opt : HIR → HIR
   | .lit v => .lit v
   | .param i => .param i
@@ -176,6 +196,13 @@ def opt : HIR → HIR
     match opt cond with
     | .lit c => if c == 0 then opt zBr else opt nzBr
     | cond' => .ifZero cond' (opt zBr) (opt nzBr)
+  | .repeatLoop count init stepBody =>
+    if count == 0 then
+      opt init
+    else if count == 1 then
+      .letBind (opt init) (opt stepBody)
+    else
+      .repeatLoop count (opt init) (opt stepBody)
 
 /-- **Theorem D3.1 (`eval_opt_eq`)**: Optimizing any `HIR` program preserves its exact
     64-bit semantics across ALL inputs `(p₀, p₁)` and ALL lexical environments `env`! -/
@@ -184,7 +211,7 @@ theorem eval_opt_eq (p₀ p₁ : UInt64) (env : List UInt64) (e : HIR) :
     eval p₀ p₁ env (opt e) = eval p₀ p₁ env e := by
   induction e generalizing env with
   | lit _ => rfl
-  | param i => rfl
+  | param _ => rfl
   | var _ => rfl
   | binOp op l r ihl ihr =>
     simp only [opt, eval_smartBinOp, ihl, ihr, eval]
@@ -194,6 +221,24 @@ theorem eval_opt_eq (p₀ p₁ : UInt64) (env : List UInt64) (e : HIR) :
     simp only [opt]
     cases hOpt : opt cond <;> simp only [eval, ← ihc env, hOpt, ihz, ihnz]
     split <;> simp [ihz, ihnz]
+  | repeatLoop count init stepBody ihi ihs =>
+    simp only [opt]
+    by_cases hc0 : count = 0
+    · subst hc0
+      exact ihi env
+    · have hbeq0 : (count == 0) = false := beq_false_of_ne hc0
+      rw [hbeq0]
+      dsimp
+      by_cases hc1 : count = 1
+      · subst hc1
+        change eval p₀ p₁ env (.letBind (opt init) (opt stepBody)) =
+          eval p₀ p₁ (eval p₀ p₁ env init :: env) stepBody
+        simp only [eval, ihi env, ihs]
+      · have hbeq1 : (count == 1) = false := beq_false_of_ne hc1
+        rw [hbeq1]
+        dsimp
+        simp only [eval, ihi env]
+        exact iterN_congr count.toNat _ _ _ (fun acc => ihs (acc :: env))
 
 end HIR
 

@@ -8,23 +8,33 @@ on:
 
 jobs:
   build-and-test:
-    name: Build & Verify Zero-Sorry Proofs
-    runs-on: macos-14
+    name: Build, Test Native AArch64 & Verify Zero-Sorry
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build & Test with Lean 4 (Apple Silicon arm64)
+      - name: Ensure ripgrep & C toolchain
+        run: |
+          uname -a
+          cc --version
+          command -v rg >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y ripgrep)
+
+      - name: Build & Test with Lean 4 (Native AArch64)
         uses: leanprover/lean-action@v1
         with:
           auto-config: false
           build: true
           test: true
 
-      - name: Verify Zero Sorry Tactics
+      - name: Verify Zero Sorry & Zero Noncomputable
         run: |
           if rg -n -w "sorry" Narya Main.lean Tests | rg -v -e '--' -e '`.*sorry.*`' -e '\*.*sorry'; then
             echo "ERROR: Found tactic 'sorry' in codebase!"
             exit 1
           fi
-          echo "Verified: zero 'sorry' tactics in codebase."
+          if rg -n -w "noncomputable" Narya Main.lean Tests | rg -v -e '--' -e '`.*noncomputable.*`' -e '\*.*noncomputable'; then
+            echo "ERROR: Found 'noncomputable' declaration in codebase!"
+            exit 1
+          fi
+          echo "Verified: zero 'sorry' tactics and zero 'noncomputable' definitions."
